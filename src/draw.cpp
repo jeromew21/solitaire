@@ -1,6 +1,6 @@
 #include "draw.h"
 #include "assets.h"
-#include "deck.h"
+#include "solitaire.h"
 
 #include <fmt/format.h>
 #include <raylib.h>

@@ -1,5 +1,5 @@
 #include "assets.h"
-#include "deck.h"
+#include "solitaire.h"
 #include "draw.h"
 #include "layout.h"
 
@@ -11,10 +11,30 @@
 #include <physfs.h>
 #include <raylib.h>
 #include <rlImGui.h>
+#include <spdlog/spdlog.h>
 
 namespace {
 
-void new_game(PersistentContext &ctx);
+void new_game(PersistentContext &ctx) {
+    GameRuleset &ruleset = ctx.ruleset;
+    Solitaire game;
+    game.ruleset = ruleset; // Use the current ruleset from the context
+    game.stock = create_deck();
+    game.tableau.resize(ruleset.num_tableau_piles);
+    game.tableau_face_down.resize(ruleset.num_tableau_piles);
+    game.foundation.resize(4);                                // 4 piles for foundation
+
+    // set up tableau piles
+    for (int i = 0; i < 7; ++i) {
+        for (int j = 0; j <= i; ++j) {
+            game.tableau[i].push_back(game.stock.back());
+            game.tableau_face_down[i] = j; // all cards are face down except the last one
+            game.stock.pop_back();
+        }
+    }
+
+    ctx.game = game;
+}
 
 ImFont *load_imgui_font_from_disk(const char *path, float size, ImFontConfig *config = nullptr) {
     const auto bytes = physfs_read_file(path);
@@ -32,8 +52,9 @@ ImFont *load_imgui_font_from_disk(const char *path, float size, ImFontConfig *co
 }
 
 bool point_inside_rect(float px, float py, const frameflow::Rect &rect) {
-    return px >= rect.origin.x && px <= rect.origin.x + rect.size.x && py >= rect.origin.y &&
-           py <= rect.origin.y + rect.size.y;
+    int fuzzy_threshold = 16.0f; // Adjust this value to make the hitbox larger or smaller
+    return (px >= rect.origin.x - fuzzy_threshold && px <= rect.origin.x + rect.size.x + fuzzy_threshold &&
+            py >= rect.origin.y - fuzzy_threshold && py <= rect.origin.y + rect.size.y + fuzzy_threshold);
 }
 
 constexpr float CARD_WIDTH = 11.0f;
@@ -83,9 +104,16 @@ void handle_press(Solitaire &game, const Vector2 &mouse_pos, const std::vector<L
             if (card_index >= (int)game.tableau[i].size()) {
                 card_index = (int)game.tableau[i].size() - 1;
             }
+
+            bool is_face_up = card_index >= game.tableau_face_down[i];
+            if (!is_face_up) {
+                break;
+            }
+
             if (!game.can_pick_up_stack_from_tableau(game.tableau[i], card_index)) {
                 break; // Can't pick up this stack, so don't lift any cards
             }
+
             // Lift the cards from the clicked index to the top of the pile
             auto card_rect = tableau_bounders[i]->get_bounding_rect();
             card_rect.origin.y += card_tableau_offset * card_index;
@@ -146,6 +174,15 @@ void handle_drop(Solitaire &game, const Vector2 &mouse_pos, const std::vector<La
     game.lifted_cards.cards.clear();
 }
 
+void reveal_tableau_cards_if_needed(Solitaire &game) {
+    for (int i = 0; i < (int)game.tableau.size(); ++i) {
+        if (!game.tableau[i].empty() && game.tableau_face_down[i] == (int)game.tableau[i].size()) {
+            // Reveal the top card of the tableau pile
+            game.tableau_face_down[i]--;
+        }
+    }
+}
+
 void ruleset_editor(GameRuleset &ruleset, bool readonly) {
     ImGui::SeparatorText("Game Ruleset");
     if (readonly) {
@@ -155,6 +192,7 @@ void ruleset_editor(GameRuleset &ruleset, bool readonly) {
     ImGui::InputInt("Stock to waste offset", &ruleset.stock_to_waste_offset);
     ImGui::Checkbox("Allow waste to recycle", &ruleset.allow_waste_to_recycle);
     ImGui::Checkbox("Allow any card to empty tableau", &ruleset.allow_any_card_to_empty_tableau);
+    ImGui::Checkbox("Auto-play to foundation", &ruleset.auto_play_to_foundation);
     ImGui::Checkbox("Allow undo", &ruleset.allow_undo);
     ImGui::InputInt("Undo plies (0 for unlimited)", &ruleset.undo_plies);
     if (readonly) {
@@ -203,6 +241,7 @@ void render_main_menu(bool *show_menu, bool *want_quit, PersistentContext &ctx) 
         }
         if (ImGui::Button("New Game", button_size)) {
             new_game(ctx);
+            *show_menu = false;
         }
         if (ImGui::Button("Settings", button_size)) {
             ImGui::OpenPopup("###SettingsModal");
@@ -221,7 +260,7 @@ void render_main_menu(bool *show_menu, bool *want_quit, PersistentContext &ctx) 
 
             if (ctx.game) {
                 auto &game = *ctx.game;
-                ruleset_editor(game.ruleset, true);
+                ruleset_editor(ctx.ruleset, true);
                 ImGui::SeparatorText("Debug");
                 ImGui::Text("Stock : %zu", game.stock.size());
                 ImGui::Text("Waste : %zu", game.waste.size());
@@ -242,23 +281,6 @@ void render_main_menu(bool *show_menu, bool *want_quit, PersistentContext &ctx) 
     ImGui::End();
     ImGui::PopStyleVar(2);
 }
-
-void new_game(PersistentContext &ctx) {
-    Solitaire game;
-    game.stock = create_deck();
-    game.tableau.resize(7);    // 7 piles for tableau
-    game.foundation.resize(4); // 4 piles for foundation
-
-    // set up tableau piles
-    for (int i = 0; i < 7; ++i) {
-        for (int j = 0; j <= i; ++j) {
-            game.tableau[i].push_back(game.stock.back());
-            game.stock.pop_back();
-        }
-    }
-
-    ctx.game = game;
-}
 } // namespace
 
 int main(int argc, char *argv[]) {
@@ -276,15 +298,14 @@ int main(int argc, char *argv[]) {
     auto &io = ImGui::GetIO();
     io.Fonts->SetFontLoader(ImGuiFreeType::GetFontLoader());
     io.Fonts->FontLoaderFlags = ImGuiFreeTypeLoaderFlags_NoHinting;
+    const float dpi_scale = GetWindowScaleDPI().x;
     ImFontConfig font_config;
-    float dpi_scale = GetWindowScaleDPI().x;
-    font_config.RasterizerDensity = dpi_scale;
-    ImFont *imgui_font = load_imgui_font_from_disk("Inter-Medium.ttf", 16);
+    ImFont *imgui_font = load_imgui_font_from_disk("Inter-Medium.ttf", 24, &font_config);
     io.FontDefault = imgui_font;
-
     int hud_logical_font_size = 24;
     auto font_buffer = physfs_read_file("Inter-Regular.ttf");
-    Font hud_font = LoadFontFromMemory(".ttf", font_buffer.data(), static_cast<int>(font_buffer.size()), hud_logical_font_size, nullptr, 0);
+    Font hud_font = LoadFontFromMemory(".ttf", font_buffer.data(), static_cast<int>(font_buffer.size()),
+                                       hud_logical_font_size * dpi_scale, nullptr, 0);
     SetTextureFilter(hud_font.texture, TEXTURE_FILTER_BILINEAR);
 
     init_card_texture_cache_v1();
@@ -414,8 +435,10 @@ int main(int argc, char *argv[]) {
         }
 
         // debug_draw_node(foundation_hflow, PURPLE);
-        for (auto *foundation_bounder : foundation_bounders) {
-            debug_draw_node(foundation_bounder, PURPLE);
+        for (int i = 0; i < (int)game.foundation.size(); ++i) {
+            if (game.foundation[i].empty()) {
+                debug_draw_node(foundation_bounders[i], ORANGE);
+            }
         }
 
         // draw empty tableau bounders
@@ -431,6 +454,7 @@ int main(int argc, char *argv[]) {
                 handle_press(game, mouse_pos, tableau_bounders, stock_card_bounder_node, stock_stack_bounder_node);
             } else if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT) && game.is_lifting()) {
                 handle_drop(game, mouse_pos, foundation_bounders, tableau_bounders);
+                reveal_tableau_cards_if_needed(game);
             }
         }
 
@@ -460,6 +484,11 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < (int)game.tableau.size(); ++i) {
             auto params = params_from_bounder(tableau_bounders[i]->get_bounding_rect(), true);
             for (int j = 0; j < (int)game.tableau[i].size(); ++j) {
+                if (j < game.tableau_face_down[i]) {
+                    params.face_up = false;
+                } else {
+                    params.face_up = true;
+                }
                 draw_card_to_screen(game.tableau[i][j], params);
                 params.y += card_tableau_offset;
             }
@@ -491,7 +520,9 @@ int main(int argc, char *argv[]) {
     CloseWindow();
 
     save_game(ctx);
-    fmt::print("Game saved to disk.\n");
+
+    delete canvas_layer;
+    spdlog::info("Exiting Solitaire House Rules");
 
     return 0;
 }

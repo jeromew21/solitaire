@@ -1,4 +1,4 @@
-#include "deck.h"
+#include "solitaire.h"
 
 #include <cereal/archives/portable_binary.hpp>
 #include <cereal/types/optional.hpp>
@@ -18,7 +18,7 @@ std::string get_save_directory() {
     const char *dir = PHYSFS_getPrefDir("DongkeyGames", "SolitaireHouseRules");
 
     if (!dir) {
-        auto code = PHYSFS_getErrorByCode(PHYSFS_getLastErrorCode());
+        // auto code = PHYSFS_getErrorByCode(PHYSFS_getLastErrorCode());
         std::exit(EXIT_FAILURE);
     }
 

@@ -12,11 +12,17 @@ struct CanvasLayer {
     void compute_layout();
 
     void add_root_node(LayoutNode *node);
+
+    ~CanvasLayer();
 };
 
 struct LayoutNode {
     LayoutNode() = default;
-    ~LayoutNode() = default;
+    virtual ~LayoutNode() {
+        for (auto *child : children) {
+            delete child;
+        }
+    };
 
     frameflow::NodeId node_id;
 

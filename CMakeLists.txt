@@ -18,7 +18,7 @@ add_subdirectory(external/anvil2)
 
 set(TARGET_SOURCES
   src/main.cpp
-  src/deck.cpp
+  src/solitaire.cpp
   src/draw.cpp
   src/assets.cpp
   src/layout.cpp

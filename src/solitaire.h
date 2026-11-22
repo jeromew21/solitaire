@@ -32,28 +32,30 @@ struct GameRuleset {
     bool allow_any_card_to_empty_tableau = false; // allow any card to be placed on empty tableau piles
     bool allow_undo = false;                      // allow undoing moves
     int undo_plies = 0;                           // number of undos allowed, 0 for unlimited
+    bool auto_play_to_foundation = true;                // automatically play cards to foundation when possible
 
     template <typename T> void serialize(T &archive) {
         archive(num_tableau_piles, stock_to_waste_offset, allow_waste_to_recycle, allow_any_card_to_empty_tableau,
-                allow_undo, undo_plies);
+                allow_undo, undo_plies, auto_play_to_foundation);
     }
 };
 
 struct Solitaire {
-    GameRuleset ruleset;
-
     std::vector<Card> stock;
 
     std::vector<Card> waste;
 
     std::vector<std::vector<Card>> tableau; // default 7 piles
+    std::vector<int> tableau_face_down;
 
     std::vector<std::vector<Card>> foundation; // default 4 piles
 
     LiftedCards lifted_cards;
 
+    GameRuleset ruleset; // should not be changed
+
     template <typename T> void serialize(T &archive) {
-        archive(ruleset, stock, waste, tableau, foundation, lifted_cards);
+        archive(stock, waste, tableau, tableau_face_down, foundation, lifted_cards, ruleset);
     }
 
     bool is_winning() const {
@@ -127,12 +129,15 @@ struct Solitaire {
 
 struct PersistentContext {
     std::optional<Solitaire> game;
-    bool show_main_menu = true; // whether to show the main menu on startup
+    bool show_main_menu = false;
     int wins = 0;            // number of wins
+
+    GameRuleset ruleset;
+
     // list of presets and statistics,
     // user settings, etc.
 
-    template <typename T> void serialize(T &archive) { archive(game, show_main_menu, wins); }
+    template <typename T> void serialize(T &archive) { archive(game, wins, ruleset); }
 };
 
 bool save_game(PersistentContext &context);

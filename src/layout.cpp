@@ -2,6 +2,12 @@
 
 CanvasLayer::CanvasLayer() {}
 
+CanvasLayer::~CanvasLayer() {
+    if (root_node) {
+        delete root_node;
+    }
+}
+
 void CanvasLayer::add_root_node(LayoutNode *node) {
     root_node = node;
     root_node->node_id = frameflow::add_generic(&layout_system, frameflow::NullNode);
