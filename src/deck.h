@@ -6,6 +6,8 @@
 struct Card {
     int rank; // 1-13 for Ace to King
     int suit; // 0-3. 0 = Hearts, 1 = Clubs, 2 = Diamonds, 3 = Spades
+
+    template <typename T> void serialize(T &archive) { archive(rank, suit); }
 };
 
 struct LiftedCards {
@@ -17,9 +19,29 @@ struct LiftedCards {
 
     float x_offset = 0.f; // x offset for dragging
     float y_offset = 0.f; // y offset for dragging
+
+    template <typename T> void serialize(T &archive) {
+        archive(cards, is_waste, is_tableau, tableau_index, x_offset, y_offset);
+    }
+};
+
+struct GameRuleset {
+    int num_tableau_piles = 7;
+    int stock_to_waste_offset = 1;                // offset for flipping stock to waste
+    bool allow_waste_to_recycle = true;           // allow recycling waste back to stock
+    bool allow_any_card_to_empty_tableau = false; // allow any card to be placed on empty tableau piles
+    bool allow_undo = false;                      // allow undoing moves
+    int undo_plies = 0;                           // number of undos allowed, 0 for unlimited
+
+    template <typename T> void serialize(T &archive) {
+        archive(num_tableau_piles, stock_to_waste_offset, allow_waste_to_recycle, allow_any_card_to_empty_tableau,
+                allow_undo, undo_plies);
+    }
 };
 
 struct Solitaire {
+    GameRuleset ruleset;
+
     std::vector<Card> stock;
 
     std::vector<Card> waste;
@@ -30,13 +52,32 @@ struct Solitaire {
 
     LiftedCards lifted_cards;
 
+    template <typename T> void serialize(T &archive) {
+        archive(ruleset, stock, waste, tableau, foundation, lifted_cards);
+    }
+
+    bool is_winning() const {
+        for (const auto &pile : foundation) {
+            if (pile.size() != 13) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     bool is_lifting() const { return !lifted_cards.cards.empty(); }
 
     void flip_stock_to_waste() {
-        if (!stock.empty()) {
-            Card card = stock.back();
-            stock.pop_back();
-            waste.push_back(card);
+        if (stock.empty() && ruleset.allow_waste_to_recycle) {
+            std::reverse(waste.begin(), waste.end());
+            stock = std::move(waste);
+            waste.clear();
+        } else {
+            for (int i = 0; i < ruleset.stock_to_waste_offset && !stock.empty(); ++i) {
+                Card card = stock.back();
+                stock.pop_back();
+                waste.push_back(card);
+            }
         }
     }
 
@@ -59,6 +100,9 @@ struct Solitaire {
         }
         const auto &tableau_pile = tableau[tableau_index];
         if (tableau_pile.empty()) {
+            if (ruleset.allow_any_card_to_empty_tableau) {
+                return true;
+            }
             return stack.front().rank == 13; // King can be placed on empty tableau
         } else {
             const Card &top_card = tableau_pile.back();
@@ -80,5 +124,21 @@ struct Solitaire {
         return true;
     }
 };
+
+struct PersistentContext {
+    std::optional<Solitaire> game;
+    bool show_main_menu = true; // whether to show the main menu on startup
+    int wins = 0;            // number of wins
+    // list of presets and statistics,
+    // user settings, etc.
+
+    template <typename T> void serialize(T &archive) { archive(game, show_main_menu, wins); }
+};
+
+bool save_game(PersistentContext &context);
+
+bool load_game(PersistentContext &context);
+
+std::vector<Card> create_deck(int seed);
 
 std::vector<Card> create_deck();
