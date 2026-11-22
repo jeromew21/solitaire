@@ -21,6 +21,7 @@ set(TARGET_SOURCES
   src/deck.cpp
   src/draw.cpp
   src/assets.cpp
+  src/layout.cpp
 )
 
 add_executable(solitaire ${TARGET_SOURCES})
