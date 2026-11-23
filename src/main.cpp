@@ -56,7 +56,7 @@ void new_game(PersistentContext &ctx) {
     game.foundation.resize(4); // 4 piles for foundation
 
     // set up tableau piles
-    for (int i = 0; i < 7; ++i) {
+    for (int i = 0; i < (int)game.tableau.size(); ++i) {
         for (int j = 0; j <= i; ++j) {
             game.tableau[i].push_back(game.stock.back());
             game.tableau_face_down[i] = j; // all cards are face down except the last one
@@ -98,8 +98,8 @@ CardDrawParams params_from_bounder(const frameflow::Rect &bounder, bool face_up)
 }
 
 void animate_flip_stock_to_waste(Solitaire &game) {
-    auto stock_bounder_node = layout_context.stock_bounder;
-    auto waste_bounder_node = layout_context.waste_bounder;
+    auto stock_bounder = layout_context.stock_bounder;
+    auto waste_bounder = layout_context.waste_bounder;
     static bool is_animating = false;
 
     if (is_animating) {
@@ -113,20 +113,19 @@ void animate_flip_stock_to_waste(Solitaire &game) {
         is_animating = true;
         auto waste_copy = game.waste; // make a copy of the waste to animate
         game.flip_stock_to_waste();
-        // for (int i = (int)waste_copy.size() - 1; i >= 0; --i) {
         for (int i = 0; i < (int)waste_copy.size(); ++i) {
             Card card = waste_copy[i];
             auto &animated_card = animated_cards[card.suit * 13 + (card.rank - 1)];
             animated_card.active = true;
             animated_card.face_up = false;
-            animated_card.x = waste_bounder_node->get_rect().origin.x + waste_bounder_node->get_rect().size.x / 2.f +
+            animated_card.x = waste_bounder->get_rect().origin.x + waste_bounder->get_rect().size.x / 2.f +
                               card_stacking_offset * i;
-            animated_card.y = waste_bounder_node->get_rect().origin.y + waste_bounder_node->get_rect().size.y / 2.f +
+            animated_card.y = waste_bounder->get_rect().origin.y + waste_bounder->get_rect().size.y / 2.f +
                               card_stacking_offset * i;
 
-            float target_x = stock_bounder_node->get_rect().origin.x + stock_bounder_node->get_rect().size.x / 2.f +
+            float target_x = stock_bounder->get_rect().origin.x + stock_bounder->get_rect().size.x / 2.f +
                              card_stacking_offset * i;
-            float target_y = stock_bounder_node->get_rect().origin.y + stock_bounder_node->get_rect().size.y / 2.f +
+            float target_y = stock_bounder->get_rect().origin.y + stock_bounder->get_rect().size.y / 2.f +
                              card_stacking_offset * i;
 
             TweenManager::get()
@@ -143,26 +142,28 @@ void animate_flip_stock_to_waste(Solitaire &game) {
 
     is_animating = true;
 
-    Card card = game.stock.back();
-    auto &animated_card = animated_cards[card.suit * 13 + (card.rank - 1)];
-    animated_card.active = true;
-    animated_card.face_up = true;
-    animated_card.x = stock_bounder_node->get_rect().origin.x + stock_bounder_node->get_rect().size.x / 2.f;
-    animated_card.y = stock_bounder_node->get_rect().origin.y + stock_bounder_node->get_rect().size.y / 2.f;
+    if (game.ruleset.stock_to_waste_offset == 1) {
+        Card card = game.stock.back();
+        auto &animated_card = animated_cards[card.suit * 13 + (card.rank - 1)];
+        animated_card.active = true;
+        animated_card.face_up = true;
+        animated_card.x = stock_bounder->get_rect().origin.x + stock_bounder->get_rect().size.x / 2.f;
+        animated_card.y = stock_bounder->get_rect().origin.y + stock_bounder->get_rect().size.y / 2.f;
 
-    float target_x = waste_bounder_node->get_rect().origin.x + waste_bounder_node->get_rect().size.x / 2.f +
-                     card_stacking_offset * (game.waste.size() + 1);
-    float target_y = waste_bounder_node->get_rect().origin.y + waste_bounder_node->get_rect().size.y / 2.f +
-                     card_stacking_offset * (game.waste.size() + 1);
+        float target_x = waste_bounder->get_rect().origin.x + waste_bounder->get_rect().size.x / 2.f +
+                         card_stacking_offset * (game.waste.size() + 1);
+        float target_y = waste_bounder->get_rect().origin.y + waste_bounder->get_rect().size.y / 2.f +
+                         card_stacking_offset * (game.waste.size() + 1);
 
-    TweenManager::get().create_tween(&animated_card.y, target_y, 0.2f, Easing::EaseInOutQuad);
-    TweenManager::get()
-        .create_tween(&animated_card.x, target_x, 0.2f, Easing::EaseInOutQuad)
-        ->on_complete([&game, &animated_card]() {
-            game.flip_stock_to_waste();
-            animated_card.active = false;
-            is_animating = false;
-        });
+        TweenManager::get().create_tween(&animated_card.y, target_y, 0.2f, Easing::EaseInOutQuad);
+        TweenManager::get()
+            .create_tween(&animated_card.x, target_x, 0.2f, Easing::EaseInOutQuad)
+            ->on_complete([&game, &animated_card]() {
+                game.flip_stock_to_waste();
+                animated_card.active = false;
+                is_animating = false;
+            });
+    }
 }
 
 void handle_press(Solitaire &game) {
@@ -279,44 +280,117 @@ void reveal_tableau_cards_if_needed(Solitaire &game) {
     }
 }
 
-void play_cards_to_foundation_if_needed(Solitaire &game) {
+bool play_cards_to_foundation_if_needed(Solitaire &game) {
     auto foundation_bounders = layout_context.foundation_bounders;
     auto waste_bounder = layout_context.waste_bounder;
     static bool is_animating = false;
     if (is_animating) {
-        return;
+        return false;
     }
     if (!game.ruleset.auto_play_to_foundation) {
-        return;
+        return false;
     }
-    if (!game.waste.empty()) {
-        Card top_waste_card = game.waste.back();
-        for (int i = 0; i < 4; ++i) {
-            if (game.can_drop_into_foundation(top_waste_card, i)) {
-                auto card = game.waste.back();
-                game.waste.pop_back();
-                auto &animated_card = animated_cards[top_waste_card.suit * 13 + (top_waste_card.rank - 1)];
-                animated_card.active = true;
-                animated_card.face_up = true;
-                animated_card.x = waste_bounder->get_rect().origin.x + waste_bounder->get_rect().size.x / 2.f;
-                animated_card.y = waste_bounder->get_rect().origin.y + waste_bounder->get_rect().size.y / 2.f;
-                float target_x =
-                    foundation_bounders[i]->get_rect().origin.x + foundation_bounders[i]->get_rect().size.x / 2.f;
-                float target_y =
-                    foundation_bounders[i]->get_rect().origin.y + foundation_bounders[i]->get_rect().size.y / 2.f;
-                is_animating = true;
-                TweenManager::get().create_tween(&animated_card.y, target_y, 0.5f, Easing::EaseInOutQuad);
-                TweenManager::get()
-                    .create_tween(&animated_card.x, target_x, 0.5f, Easing::EaseInOutQuad)
-                    ->on_complete([&game, i, card, &animated_card]() {
-                        is_animating = false;
-                        animated_card.active = false;
-                        game.foundation[i].push_back(card);
-                    });
-                return;
-            }
+    // Only can play a card to foundation if:
+    // Foundations have all 4 of the card of the previous rank, or if the card is an Ace (rank 1)
+    int highest_rank_in_foundations[4] = {0, 0, 0, 0};
+    for (int i = 0; i < 4; ++i) {
+        if (!game.foundation[i].empty()) {
+            highest_rank_in_foundations[i] = game.foundation[i].back().rank;
         }
     }
+    int highest_rank_temp = 0;
+    for (int i = 1; i <= 13; i++) {
+        int count_of_rank = 0;
+        for (int j = 0; j < 4; ++j) {
+            if (highest_rank_in_foundations[j] >= i) {
+                count_of_rank++;
+            }
+        }
+        if (count_of_rank == 4) {
+            highest_rank_temp = i;
+        }
+    }
+    const int highest_rank = highest_rank_temp; // The highest rank that has all 4 cards in the foundations
+
+    bool waste = [&]() {
+        if (game.waste.empty()) {
+            return false;
+        }
+        Card top_waste_card = game.waste.back();
+        if (top_waste_card.rank != highest_rank + 1) {
+            return false;
+        }
+        for (int i = 0; i < 4; ++i) {
+            if (!game.can_drop_into_foundation(top_waste_card, i)) {
+                continue;
+            }
+            auto card = game.waste.back();
+            game.waste.pop_back();
+            auto &animated_card = animated_cards[top_waste_card.suit * 13 + (top_waste_card.rank - 1)];
+            animated_card.active = true;
+            animated_card.face_up = true;
+            animated_card.x = waste_bounder->get_rect().origin.x + waste_bounder->get_rect().size.x / 2.f;
+            animated_card.y = waste_bounder->get_rect().origin.y + waste_bounder->get_rect().size.y / 2.f;
+            float target_x =
+                foundation_bounders[i]->get_rect().origin.x + foundation_bounders[i]->get_rect().size.x / 2.f;
+            float target_y =
+                foundation_bounders[i]->get_rect().origin.y + foundation_bounders[i]->get_rect().size.y / 2.f;
+            is_animating = true;
+            TweenManager::get().create_tween(&animated_card.y, target_y, 0.5f, Easing::EaseInOutQuad);
+            TweenManager::get()
+                .create_tween(&animated_card.x, target_x, 0.5f, Easing::EaseInOutQuad)
+                ->on_complete([&game, i, card, &animated_card]() {
+                    is_animating = false;
+                    animated_card.active = false;
+                    game.foundation[i].push_back(card);
+                });
+            return true;
+        }
+        return false;
+    }();
+
+    bool tabs = [&]() {
+        for (int i = 0; i < (int)game.tableau.size(); ++i) {
+            if (game.tableau[i].empty()) {
+                continue;
+            }
+            Card top_tableau_card = game.tableau[i].back();
+            if (top_tableau_card.rank != highest_rank + 1) {
+                continue;
+            }
+            for (int j = 0; j < 4; ++j) {
+                if (game.can_drop_into_foundation(top_tableau_card, j)) {
+                    auto card = game.tableau[i].back();
+                    game.tableau[i].pop_back();
+                    auto &animated_card = animated_cards[top_tableau_card.suit * 13 + (top_tableau_card.rank - 1)];
+                    animated_card.active = true;
+                    animated_card.face_up = true;
+                    animated_card.x = layout_context.tableau_bounders[i]->get_rect().origin.x +
+                                      layout_context.tableau_bounders[i]->get_rect().size.x / 2.f;
+                    animated_card.y = layout_context.tableau_bounders[i]->get_rect().origin.y +
+                                      layout_context.tableau_bounders[i]->get_rect().size.y / 2.f +
+                                      card_tableau_offset * (game.tableau[i].size());
+                    float target_x =
+                        foundation_bounders[j]->get_rect().origin.x + foundation_bounders[j]->get_rect().size.x / 2.f;
+                    float target_y =
+                        foundation_bounders[j]->get_rect().origin.y + foundation_bounders[j]->get_rect().size.y / 2.f;
+                    is_animating = true;
+                    TweenManager::get().create_tween(&animated_card.y, target_y, 0.5f, Easing::EaseInOutQuad);
+                    TweenManager::get()
+                        .create_tween(&animated_card.x, target_x, 0.5f, Easing::EaseInOutQuad)
+                        ->on_complete([&game, j, card, &animated_card]() {
+                            is_animating = false;
+                            animated_card.active = false;
+                            game.foundation[j].push_back(card);
+                        });
+                    return true;
+                }
+            }
+        }
+        return false;
+    }();
+
+    return waste || tabs;
 }
 
 void ruleset_editor(GameRuleset &ruleset, bool readonly) {
@@ -396,7 +470,7 @@ void render_main_menu(bool *show_menu, bool *want_quit, PersistentContext &ctx) 
 
             if (ctx.game) {
                 auto &game = *ctx.game;
-                ruleset_editor(ctx.ruleset, true);
+                ruleset_editor(ctx.ruleset, false);
                 ImGui::SeparatorText("Debug");
                 ImGui::Text("Stock : %zu", game.stock.size());
                 ImGui::Text("Waste : %zu", game.waste.size());
@@ -420,9 +494,7 @@ void render_main_menu(bool *show_menu, bool *want_quit, PersistentContext &ctx) 
 } // namespace
 
 int main(int argc, char *argv[]) {
-    using namespace frameflow;
     (void)argc;
-    physfs_init(argv[0]);
 
     SetTraceLogLevel(LOG_NONE);
     SetConfigFlags(FLAG_WINDOW_HIGHDPI | FLAG_WINDOW_RESIZABLE);
@@ -430,6 +502,9 @@ int main(int argc, char *argv[]) {
     SetWindowMinSize(800, 600);
     SetTargetFPS(60);
     SetExitKey(KEY_NULL); // disable default exit
+
+    physfs_init(argv[0]);
+
     rlImGuiSetup(true);
     auto &io = ImGui::GetIO();
     io.Fonts->SetFontLoader(ImGuiFreeType::GetFontLoader());
@@ -461,7 +536,7 @@ int main(int argc, char *argv[]) {
     PersistentContext ctx;
     bool load_result = load_game(ctx);
     if (load_result) {
-        //debug print saved window size
+        // debug print saved window size
         fmt::print("Loaded saved window size: {}x{}\n", ctx.window_width, ctx.window_height);
         SetWindowSize(ctx.window_width, ctx.window_height);
         if (ctx.is_window_maximized) {
@@ -573,14 +648,6 @@ int main(int argc, char *argv[]) {
             DrawRectangleLinesEx({x, y, w, h}, 2.0f, color);
         };
 
-        /*
-        debug_draw_node(left_vbox, RED);
-        debug_draw_node(right_vbox, BLUE);
-        debug_draw_node(stock_stack_node, GREEN);
-        debug_draw_node(stock_bounder_node, GREEN);
-        debug_draw_node(waste_bounder_node, GREEN);
-        */
-
         auto debug_draw_node_recursive = [&](LayoutNode *node, Color color, auto &self) -> void {
             debug_draw_node(node, color);
             for (auto *child : node->children) {
@@ -589,7 +656,6 @@ int main(int argc, char *argv[]) {
         };
 
         // debug_draw_node_recursive(root_node, PURPLE, debug_draw_node_recursive);
-
 
         if (ctx.game) {
             auto &game = *ctx.game;
@@ -637,7 +703,12 @@ int main(int argc, char *argv[]) {
                 reveal_tableau_cards_if_needed(game);
             }
         }
-        play_cards_to_foundation_if_needed(game);
+        if (IsKeyPressed(KEY_SPACE)) {
+            animate_flip_stock_to_waste(game);
+        }
+        if (play_cards_to_foundation_if_needed(game)) {
+            reveal_tableau_cards_if_needed(game);
+        }
 
         if (!game.stock.empty()) {
             auto params = params_from_bounder(stock_bounder_node->get_rect(), false);

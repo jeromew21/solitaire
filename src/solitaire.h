@@ -29,7 +29,7 @@ struct GameRuleset {
     int num_tableau_piles = 7;
     int stock_to_waste_offset = 1;                // offset for flipping stock to waste
     bool allow_waste_to_recycle = true;           // allow recycling waste back to stock
-    bool allow_any_card_to_empty_tableau = false; // allow any card to be placed on empty tableau piles
+    bool allow_any_card_to_empty_tableau = true; // allow any card to be placed on empty tableau piles
     bool allow_undo = false;                      // allow undoing moves
     int undo_plies = 0;                           // number of undos allowed, 0 for unlimited
     bool auto_play_to_foundation = true;          // automatically play cards to foundation when possible
