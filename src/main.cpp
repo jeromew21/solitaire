@@ -97,7 +97,9 @@ CardDrawParams params_from_bounder(const frameflow::Rect &bounder, bool face_up)
                           .face_up = face_up};
 }
 
-void animate_flip_stock_to_waste(Solitaire &game, LayoutNode *stock_bounder_node, LayoutNode *waste_bounder_node) {
+void animate_flip_stock_to_waste(Solitaire &game) {
+    auto stock_bounder_node = layout_context.stock_bounder;
+    auto waste_bounder_node = layout_context.waste_bounder;
     static bool is_animating = false;
 
     if (is_animating) {
@@ -133,9 +135,9 @@ void animate_flip_stock_to_waste(Solitaire &game, LayoutNode *stock_bounder_node
                 ->on_complete([&animated_card]() { animated_card.active = false; });
             TweenManager::get().create_tween(&animated_card.x, target_x, 0.5f, Easing::EaseInOutQuad);
         }
-        TweenManager::get()
-            .create_timer(0.2f + (waste_copy.size() - 1) * 0.05f)
-            ->on_complete([]() { is_animating = false; });
+        TweenManager::get().create_timer(0.2f + (waste_copy.size() - 1) * 0.05f)->on_complete([]() {
+            is_animating = false;
+        });
         return;
     }
 
@@ -172,7 +174,7 @@ void handle_press(Solitaire &game) {
     bool clicked_on_stock = point_inside_rect(mouse_pos.x, mouse_pos.y, stock_bounder->get_rect());
     bool clicked_on_waste = point_inside_rect(mouse_pos.x, mouse_pos.y, waste_bounder->get_rect());
     if (clicked_on_stock) {
-        animate_flip_stock_to_waste(game, stock_bounder, waste_bounder);
+        animate_flip_stock_to_waste(game);
         return;
     } else if (clicked_on_waste && !game.waste.empty()) {
         const float center_x = waste_bounder->get_rect().origin.x + waste_bounder->get_rect().size.x / 2.f;
@@ -457,7 +459,15 @@ int main(int argc, char *argv[]) {
     init_card_texture_cache_v1();
 
     PersistentContext ctx;
-    if (!load_game(ctx)) {
+    bool load_result = load_game(ctx);
+    if (load_result) {
+        //debug print saved window size
+        fmt::print("Loaded saved window size: {}x{}\n", ctx.window_width, ctx.window_height);
+        SetWindowSize(ctx.window_width, ctx.window_height);
+        if (ctx.is_window_maximized) {
+            MaximizeWindow();
+        }
+    } else {
         new_game(ctx);
     }
 
@@ -480,11 +490,11 @@ int main(int argc, char *argv[]) {
 
     auto *stock_deck_node = new Center();
     left_vbox->add_child(stock_deck_node);
-    stock_deck_node->anchors_fill()->minimum_size(200.f, 300.f);
+    stock_deck_node->anchors_fill()->minimum_size(200.f, CARD_HEIGHT * CARD_SCALE + 50);
 
     auto *stock_stack_node = new Center();
     left_vbox->add_child(stock_stack_node);
-    stock_stack_node->anchors_fill()->minimum_size(200.f, 300.f);
+    stock_stack_node->anchors_fill()->minimum_size(200.f, CARD_HEIGHT * CARD_SCALE + 50);
 
     auto *stock_bounder_node = new Generic();
     stock_deck_node->add_child(stock_bounder_node);
@@ -549,6 +559,9 @@ int main(int argc, char *argv[]) {
         if (recompute_layout) {
             root_node->bounds(0.f, 0.f, (float)GetScreenWidth(), (float)GetScreenHeight());
             canvas_layer->compute_layout();
+            ctx.window_width = GetScreenWidth() * GetWindowScaleDPI().x;
+            ctx.window_height = GetScreenHeight() * GetWindowScaleDPI().y;
+            ctx.is_window_maximized = IsWindowMaximized();
         }
 
         auto debug_draw_node = [&](LayoutNode *node, Color color) {
@@ -568,6 +581,16 @@ int main(int argc, char *argv[]) {
         debug_draw_node(waste_bounder_node, GREEN);
         */
 
+        auto debug_draw_node_recursive = [&](LayoutNode *node, Color color, auto &self) -> void {
+            debug_draw_node(node, color);
+            for (auto *child : node->children) {
+                self(child, color, self);
+            }
+        };
+
+        // debug_draw_node_recursive(root_node, PURPLE, debug_draw_node_recursive);
+
+
         if (ctx.game) {
             auto &game = *ctx.game;
             if (game.is_winning()) {
@@ -578,8 +601,9 @@ int main(int argc, char *argv[]) {
         }
 
         {
-            Vector2 pos = {floorf(24.0f), floorf(24.0f)};
             std::string wins_text = fmt::format("Wins: {}", ctx.wins);
+            auto text_size = MeasureTextEx(hud_font, wins_text.c_str(), (float)hud_logical_font_size, 0.0f);
+            Vector2 pos = {floorf(GetScreenWidth() - text_size.x - 24.0f), floorf(24.0f)};
             DrawTextEx(hud_font, wins_text.c_str(), {pos.x + 1.0f, pos.y + 1.0f}, (float)hud_logical_font_size, 0.0f,
                        Fade(BLACK, 0.7f));
             DrawTextEx(hud_font, wins_text.c_str(), pos, (float)hud_logical_font_size, 0.0f, WHITE);
@@ -587,7 +611,7 @@ int main(int argc, char *argv[]) {
 
         auto &game = *ctx.game;
 
-        if (game.stock.empty()) {
+        if (game.stock.empty() && game.ruleset.allow_waste_to_recycle) {
             debug_draw_node(stock_bounder_node, GREEN);
         }
 

@@ -32,7 +32,7 @@ struct GameRuleset {
     bool allow_any_card_to_empty_tableau = false; // allow any card to be placed on empty tableau piles
     bool allow_undo = false;                      // allow undoing moves
     int undo_plies = 0;                           // number of undos allowed, 0 for unlimited
-    bool auto_play_to_foundation = true;                // automatically play cards to foundation when possible
+    bool auto_play_to_foundation = true;          // automatically play cards to foundation when possible
 
     template <typename T> void serialize(T &archive) {
         archive(num_tableau_piles, stock_to_waste_offset, allow_waste_to_recycle, allow_any_card_to_empty_tableau,
@@ -130,14 +130,17 @@ struct Solitaire {
 struct PersistentContext {
     std::optional<Solitaire> game;
     bool show_main_menu = false;
-    int wins = 0;            // number of wins
+    int wins = 0;           // number of wins
+    int window_width{1280}; // window width
+    int window_height{720}; // window height
+    bool is_window_maximized{false}; // whether the window is maximized
 
     GameRuleset ruleset;
 
     // list of presets and statistics,
     // user settings, etc.
 
-    template <typename T> void serialize(T &archive) { archive(game, wins, ruleset); }
+    template <typename T> void serialize(T &archive) { archive(game, wins, ruleset, window_width, window_height, is_window_maximized); }
 };
 
 bool save_game(PersistentContext &context);
