@@ -2,12 +2,6 @@
 
 CanvasLayer::CanvasLayer() {}
 
-CanvasLayer::~CanvasLayer() {
-    if (root_node) {
-        delete root_node;
-    }
-}
-
 void CanvasLayer::add_root_node(LayoutNode *node) {
     root_node = node;
     root_node->node_id = frameflow::add_generic(&layout_system, frameflow::NullNode);
@@ -29,7 +23,7 @@ void LayoutNode::add_child_with_margin(LayoutNode *child, float x) {
     margin_node->anchors_fill();
 }
 
-frameflow::Rect LayoutNode::get_bounding_rect() { return frameflow::get_node(layout_system, node_id)->bounds; }
+frameflow::Rect LayoutNode::get_rect() { return frameflow::get_node(layout_system, node_id)->bounds; }
 
 Generic::Generic() {}
 
