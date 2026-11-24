@@ -1,8 +1,8 @@
 #pragma once
 
 #include <optional>
-#include <vector>
 #include <variant>
+#include <vector>
 
 struct Card {
     int rank; // 1-13 for Ace to King
@@ -28,12 +28,12 @@ struct LiftedCards {
 
 struct GameRuleset {
     int num_tableau_piles = 7;
-    int stock_to_waste_offset = 1;                // offset for flipping stock to waste
-    bool allow_waste_to_recycle = true;           // allow recycling waste back to stock
+    int stock_to_waste_offset = 1;               // offset for flipping stock to waste
+    bool allow_waste_to_recycle = true;          // allow recycling waste back to stock
     bool allow_any_card_to_empty_tableau = true; // allow any card to be placed on empty tableau piles
-    bool allow_undo = false;                      // allow undoing moves
-    int undo_plies = 0;                           // number of undos allowed, 0 for unlimited
-    bool auto_play_to_foundation = true;          // automatically play cards to foundation when possible
+    bool allow_undo = false;                     // allow undoing moves
+    int undo_plies = 0;                          // number of undos allowed, 0 for unlimited
+    bool auto_play_to_foundation = true;         // automatically play cards to foundation when possible
 
     template <typename T> void serialize(T &archive) {
         archive(num_tableau_piles, stock_to_waste_offset, allow_waste_to_recycle, allow_any_card_to_empty_tableau,
@@ -41,9 +41,7 @@ struct GameRuleset {
     }
 };
 
-
-struct SolitaireAction {
-};
+struct SolitaireAction {};
 
 struct Solitaire {
     std::vector<Card> stock;
@@ -73,6 +71,18 @@ struct Solitaire {
     }
 
     bool is_lifting() const { return !lifted_cards.cards.empty(); }
+
+    void flip_one_stock_to_waste() {
+        if (stock.empty() && ruleset.allow_waste_to_recycle) {
+            std::reverse(waste.begin(), waste.end());
+            stock = std::move(waste);
+            waste.clear();
+        } else {
+            Card card = stock.back();
+            stock.pop_back();
+            waste.push_back(card);
+        }
+    }
 
     void flip_stock_to_waste() {
         if (stock.empty() && ruleset.allow_waste_to_recycle) {
@@ -135,9 +145,9 @@ struct Solitaire {
 struct PersistentContext {
     std::optional<Solitaire> game;
     bool show_main_menu = false;
-    int wins = 0;           // number of wins
-    int window_width{1280}; // window width
-    int window_height{720}; // window height
+    int wins = 0;                    // number of wins
+    int window_width{1280};          // window width
+    int window_height{720};          // window height
     bool is_window_maximized{false}; // whether the window is maximized
 
     GameRuleset ruleset;
@@ -145,7 +155,9 @@ struct PersistentContext {
     // list of presets and statistics,
     // user settings, etc.
 
-    template <typename T> void serialize(T &archive) { archive(game, wins, ruleset, window_width, window_height, is_window_maximized); }
+    template <typename T> void serialize(T &archive) {
+        archive(game, wins, ruleset, window_width, window_height, is_window_maximized);
+    }
 };
 
 bool save_game(PersistentContext &context);

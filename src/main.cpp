@@ -164,6 +164,41 @@ void animate_flip_stock_to_waste(Solitaire &game) {
                 animated_card.active = false;
                 is_animating = false;
             });
+    } else {
+        const float travel_time = 0.2f;
+        const float delay_base = 0.45f;
+        TweenManager::get()
+            .create_timer(travel_time + (game.ruleset.stock_to_waste_offset - 1) * delay_base)
+            ->on_complete([]() { is_animating = false; });
+        auto stock_copy = game.stock;
+        for (int i = 0; i < game.ruleset.stock_to_waste_offset; i++) {
+            if (stock_copy.empty()) {
+                break;
+            }
+            Card card = stock_copy.back();
+            stock_copy.pop_back();
+            auto &animated_card = animated_cards[card.suit * 13 + (card.rank - 1)];
+            animated_card.active = true;
+            animated_card.face_up = true;
+            animated_card.x = stock_bounder->get_rect().origin.x + stock_bounder->get_rect().size.x / 2.f;
+            animated_card.y = stock_bounder->get_rect().origin.y + stock_bounder->get_rect().size.y / 2.f;
+
+            float target_x = waste_bounder->get_rect().origin.x + waste_bounder->get_rect().size.x / 2.f +
+                             card_stacking_offset * (game.waste.size() + 1);
+            float target_y = waste_bounder->get_rect().origin.y + waste_bounder->get_rect().size.y / 2.f +
+                             card_stacking_offset * (game.waste.size() + 1);
+
+            TweenManager::get()
+                .create_tween(&animated_card.y, target_y, travel_time, Easing::EaseInOutQuad)
+                ->delay(i * delay_base);
+            TweenManager::get()
+                .create_tween(&animated_card.x, target_x, travel_time, Easing::EaseInOutQuad)
+                ->delay(i * delay_base)
+                ->on_complete([&game, &animated_card]() {
+                    animated_card.active = false;
+                    game.flip_one_stock_to_waste();
+                });
+        }
     }
 }
 
@@ -497,6 +532,52 @@ void render_main_menu(bool *show_menu, bool *want_quit, PersistentContext &ctx) 
     ImGui::End();
     ImGui::PopStyleVar(2);
 }
+
+void draw_animated_cards(const Solitaire &game) {
+    std::array<bool, 52> touched_cards = {false};
+    for (auto &card : game.stock) {
+        auto animated_card = animated_cards[card.suit * 13 + (card.rank - 1)];
+        touched_cards[card.suit * 13 + (card.rank - 1)] = true;
+        if (animated_card.active) {
+            auto params = CardDrawParams{.x = animated_card.x,
+                                         .y = animated_card.y,
+                                         .width = CARD_WIDTH * CARD_SCALE,
+                                         .height = CARD_HEIGHT * CARD_SCALE,
+                                         .rotation = 0.f,
+                                         .face_up = animated_card.face_up};
+            draw_card_to_screen(animated_card.card, params);
+        }
+    }
+    for (auto &card : game.waste) {
+        auto animated_card = animated_cards[card.suit * 13 + (card.rank - 1)];
+        touched_cards[card.suit * 13 + (card.rank - 1)] = true;
+        if (animated_card.active) {
+            auto params = CardDrawParams{.x = animated_card.x,
+                                         .y = animated_card.y,
+                                         .width = CARD_WIDTH * CARD_SCALE,
+                                         .height = CARD_HEIGHT * CARD_SCALE,
+                                         .rotation = 0.f,
+                                         .face_up = animated_card.face_up};
+            draw_card_to_screen(animated_card.card, params);
+        }
+    }
+
+    for (int i = 0; i < 52; ++i) {
+        if (touched_cards[i]) {
+            continue;
+        }
+        auto animated_card = animated_cards[i];
+        if (animated_card.active) {
+            auto params = CardDrawParams{.x = animated_card.x,
+                                         .y = animated_card.y,
+                                         .width = CARD_WIDTH * CARD_SCALE,
+                                         .height = CARD_HEIGHT * CARD_SCALE,
+                                         .rotation = 0.f,
+                                         .face_up = animated_card.face_up};
+            draw_card_to_screen(animated_card.card, params);
+        }
+    }
+}
 } // namespace
 
 int main(int argc, char *argv[]) {
@@ -685,6 +766,7 @@ int main(int argc, char *argv[]) {
                 self(child, color, self);
             }
         };
+        (void)debug_draw_node_recursive;
 
         // debug_draw_node_recursive(root_node, PURPLE, debug_draw_node_recursive);
 
@@ -741,65 +823,61 @@ int main(int argc, char *argv[]) {
             reveal_tableau_cards_if_needed(game);
         }
 
-        if (!game.stock.empty()) {
-            auto params = params_from_bounder(stock_bounder_node->get_rect(), false);
-            for (int i = 0; i < (int)game.stock.size(); ++i) {
-                params.y += card_stacking_offset;
-                params.x += card_stacking_offset;
-                draw_card_to_screen(game.stock[i], params);
-            }
-        }
-        if (!game.waste.empty()) {
-            auto params = params_from_bounder(waste_bounder_node->get_rect(), true);
-            for (int i = 0; i < (int)game.waste.size() - 1; ++i) {
-                params.y += card_stacking_offset;
-                params.x += card_stacking_offset;
-                draw_card_to_screen(game.waste[i], params);
-            }
-            draw_card_to_screen(game.waste.back(), params);
-        }
-        for (int i = 0; i < (int)game.foundation.size(); ++i) {
-            if (!game.foundation[i].empty()) {
-                auto params = params_from_bounder(foundation_bounders[i]->get_rect(), true);
-                draw_card_to_screen(game.foundation[i].back(), params);
-            }
-        }
-        for (int i = 0; i < (int)game.tableau.size(); ++i) {
-            auto params = params_from_bounder(tableau_bounders[i]->get_rect(), true);
-            for (int j = 0; j < (int)game.tableau[i].size(); ++j) {
-                if (j < game.tableau_face_down[i]) {
-                    params.face_up = false;
-                } else {
-                    params.face_up = true;
+        [&game]() {
+            auto stock_bounder_node = layout_context.stock_bounder;
+            auto waste_bounder_node = layout_context.waste_bounder;
+            auto foundation_bounders = layout_context.foundation_bounders;
+            auto tableau_bounders = layout_context.tableau_bounders;
+            if (!game.stock.empty()) {
+                auto params = params_from_bounder(stock_bounder_node->get_rect(), false);
+                for (int i = 0; i < (int)game.stock.size(); ++i) {
+                    params.y += card_stacking_offset;
+                    params.x += card_stacking_offset;
+                    draw_card_to_screen(game.stock[i], params);
                 }
-                draw_card_to_screen(game.tableau[i][j], params);
-                params.y += card_tableau_offset;
             }
-        }
-        if (game.is_lifting()) {
-            auto params = CardDrawParams{.x = GetMousePosition().x - game.lifted_cards.x_offset,
-                                         .y = GetMousePosition().y - game.lifted_cards.y_offset,
-                                         .width = CARD_WIDTH * CARD_SCALE,
-                                         .height = CARD_HEIGHT * CARD_SCALE,
-                                         .rotation = 0.f,
-                                         .face_up = true};
-            for (int i = 0; i < (int)game.lifted_cards.cards.size(); ++i) {
-                draw_card_to_screen(game.lifted_cards.cards[i], params);
-                params.y += card_tableau_offset;
+            if (!game.waste.empty()) {
+                auto params = params_from_bounder(waste_bounder_node->get_rect(), true);
+                for (int i = 0; i < (int)game.waste.size() - 1; ++i) {
+                    params.y += card_stacking_offset;
+                    params.x += card_stacking_offset;
+                    draw_card_to_screen(game.waste[i], params);
+                }
+                draw_card_to_screen(game.waste.back(), params);
             }
-        }
-
-        for (const auto &animated_card : animated_cards) {
-            if (animated_card.active) {
-                auto params = CardDrawParams{.x = animated_card.x,
-                                             .y = animated_card.y,
+            for (int i = 0; i < (int)game.foundation.size(); ++i) {
+                if (!game.foundation[i].empty()) {
+                    auto params = params_from_bounder(foundation_bounders[i]->get_rect(), true);
+                    draw_card_to_screen(game.foundation[i].back(), params);
+                }
+            }
+            for (int i = 0; i < (int)game.tableau.size(); ++i) {
+                auto params = params_from_bounder(tableau_bounders[i]->get_rect(), true);
+                for (int j = 0; j < (int)game.tableau[i].size(); ++j) {
+                    if (j < game.tableau_face_down[i]) {
+                        params.face_up = false;
+                    } else {
+                        params.face_up = true;
+                    }
+                    draw_card_to_screen(game.tableau[i][j], params);
+                    params.y += card_tableau_offset;
+                }
+            }
+            if (game.is_lifting()) {
+                auto params = CardDrawParams{.x = GetMousePosition().x - game.lifted_cards.x_offset,
+                                             .y = GetMousePosition().y - game.lifted_cards.y_offset,
                                              .width = CARD_WIDTH * CARD_SCALE,
                                              .height = CARD_HEIGHT * CARD_SCALE,
                                              .rotation = 0.f,
-                                             .face_up = animated_card.face_up};
-                draw_card_to_screen(animated_card.card, params);
+                                             .face_up = true};
+                for (int i = 0; i < (int)game.lifted_cards.cards.size(); ++i) {
+                    draw_card_to_screen(game.lifted_cards.cards[i], params);
+                    params.y += card_tableau_offset;
+                }
             }
-        }
+        }();
+
+        draw_animated_cards(game);
 
         render_main_menu(&ctx.show_main_menu, &want_quit, ctx);
         if (!ImGui::GetIO().WantCaptureKeyboard && IsKeyPressed(KEY_ESCAPE)) {

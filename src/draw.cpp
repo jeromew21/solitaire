@@ -4,10 +4,19 @@
 
 #include <fmt/format.h>
 #include <raylib.h>
+#include <spdlog/spdlog.h>
 
 #include <array>
-#include <thread>
 #include <memory>
+#include <thread>
+
+#include <platform.h>
+#if PLATFORM_MACOS
+    #include <pthread.h>
+#elif PLATFORM_WINDOWS
+    #define WIN32_LEAN_AND_MEAN
+    #include <windows.h>
+#endif
 
 namespace {
 
@@ -33,7 +42,6 @@ Image load_image_from_disk(const char *path) {
         return {};
 
     Image image = LoadImageFromMemory(".png", bytes.data(), static_cast<int>(bytes.size()));
-    ImageResize(&image, image.width * 4, image.height * 4); // double the size of the image
     return image;
 }
 
@@ -45,6 +53,25 @@ Texture2D load_texture_from_disk(const char *path) {
     GenTextureMipmaps(&texture);
     SetTextureFilter(texture, TEXTURE_FILTER_ANISOTROPIC_16X);
     return texture;
+}
+
+unsigned int get_worker_thread_count() {
+    if constexpr (ANVIL_PLATFORM_WEB) {
+        return 0; // Single-threaded on Web unless SharedArrayBuffer is enabled
+    } else if constexpr (ANVIL_PLATFORM_MACOS && ARCH_ARM64) {
+        return 4; // Stay on Apple Silicon Performance cores
+    } else {
+        unsigned int coreCount = std::thread::hardware_concurrency();
+        return std::min(16u, std::max(1u, coreCount > 1 ? coreCount - 1 : 1u));
+    }
+}
+
+void boost_thread_priority() {
+#if ANVIL_PLATFORM_MACOS
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
+#elif ANVIL_PLATFORM_WINDOWS
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+#endif
 }
 
 const char *card_to_path_v1(const Card &card) {
@@ -93,7 +120,8 @@ void init_card_images_v1(std::atomic<bool> &is_loading, std::atomic<int> &progre
         for (int rank = 1; rank <= 13; ++rank) {
             Card card{rank, suit};
             const char *path = card_to_path_v1(card);
-            asset_jobs.push_back({.path = path, .image = {}, .texture = {}, .is_card = true, .id = suit * 13 + (rank - 1)});
+            asset_jobs.push_back(
+                {.path = path, .image = {}, .texture = {}, .is_card = true, .id = suit * 13 + (rank - 1)});
         }
     }
 
@@ -102,15 +130,15 @@ void init_card_images_v1(std::atomic<bool> &is_loading, std::atomic<int> &progre
         asset_jobs.push_back({.path = back_path, .image = {}, .texture = {}, .is_card = false, .id = i - 1});
     }
 
-    unsigned int coreCount = std::thread::hardware_concurrency();
-    unsigned int numWorkers = std::min(16u, std::max(1u, coreCount > 1 ? coreCount - 1 : 1u));
-    fmt::print("Detected {} CPU cores, using {} threads for loading images.\n", coreCount, numWorkers);
+    unsigned int numWorkers = get_worker_thread_count();
+    spdlog::info("Using {} threads for loading images.\n", numWorkers);
 
     // Heap-allocated so it outlives init_card_images_v1() while detached threads run
     auto nextJobIndex = std::make_shared<std::atomic<size_t>>(0);
 
     for (unsigned int w = 0; w < numWorkers; ++w) {
         std::thread([nextJobIndex, &progress]() {
+            boost_thread_priority();
             while (true) {
                 size_t idx = nextJobIndex->fetch_add(1, std::memory_order_relaxed);
                 if (idx >= asset_jobs.size())
@@ -118,7 +146,10 @@ void init_card_images_v1(std::atomic<bool> &is_loading, std::atomic<int> &progre
 
                 Image img = load_image_from_disk(asset_jobs[idx].path.c_str());
                 if (img.data != nullptr) {
+                    // in debug:
                     ImageResize(&img, img.width * 2, img.height * 2);
+                    // in prod:
+                    // ImageResize(&img, img.width * 4, img.height * 4);
                 }
 
                 asset_jobs[idx].image = img;
