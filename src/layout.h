@@ -18,11 +18,10 @@ struct LayoutNode {
     LayoutNode() = default;
     ~LayoutNode() = default;
 
-    frameflow::NodeId node_id;
-
-    frameflow::System *layout_system;
-
     std::vector<LayoutNode *> children;
+
+    frameflow::NodeId node_id_;
+    frameflow::System *layout_system_;
 
     void add_child(LayoutNode *child);
     void add_child_with_margin(LayoutNode *child, float x);
@@ -30,58 +29,58 @@ struct LayoutNode {
     frameflow::Rect get_rect();
 
     LayoutNode *anchors_fill() {
-        frameflow::Node *node = frameflow::get_node(layout_system, node_id);
+        frameflow::Node *node = frameflow::get_node(layout_system_, node_id_);
         node->anchors = {0.0f, 0.0f, 1.f, 1.f};
         return this;
     }
 
     LayoutNode *anchors(float left, float top, float right, float bottom) {
-        frameflow::Node *node = frameflow::get_node(layout_system, node_id);
+        frameflow::Node *node = frameflow::get_node(layout_system_, node_id_);
         node->anchors = {left, top, right, bottom};
         return this;
     }
 
     LayoutNode *expand(float x, float y) {
-        frameflow::Node *node = frameflow::get_node(layout_system, node_id);
+        frameflow::Node *node = frameflow::get_node(layout_system_, node_id_);
         node->expand = {x, y};
         return this;
     }
 
     LayoutNode *minimum_size(float width, float height) {
-        frameflow::Node *node = frameflow::get_node(layout_system, node_id);
+        frameflow::Node *node = frameflow::get_node(layout_system_, node_id_);
         node->minimum_size = {width, height};
         return this;
     }
 
     LayoutNode *bounds(float x, float y, float width, float height) {
-        frameflow::Node *node = frameflow::get_node(layout_system, node_id);
+        frameflow::Node *node = frameflow::get_node(layout_system_, node_id_);
         node->bounds = {{x, y}, {width, height}};
         return this;
     }
 
-  private:
-    virtual frameflow::NodeId init(LayoutNode *parent) = 0;
+private:
+    virtual frameflow::NodeId init_(LayoutNode *parent) = 0;
 };
 
 struct Generic : public LayoutNode {
     Generic();
 
   private:
-    frameflow::NodeId init(LayoutNode *parent) override;
+    frameflow::NodeId init_(LayoutNode *parent) override;
 };
 
 struct HBox : public LayoutNode {
     HBox();
 
   private:
-    frameflow::NodeId init(LayoutNode *parent) override;
+    frameflow::NodeId init_(LayoutNode *parent) override;
 };
 
 struct VBox : public LayoutNode {
     VBox();
 
   private:
-    frameflow::NodeId init(LayoutNode *parent) override;
+    frameflow::NodeId init_(LayoutNode *parent) override;
 };
 
 struct Margin : public LayoutNode {
@@ -90,26 +89,26 @@ struct Margin : public LayoutNode {
     frameflow::MarginData margin_data;
 
   private:
-    frameflow::NodeId init(LayoutNode *parent) override;
+    frameflow::NodeId init_(LayoutNode *parent) override;
 };
 
 struct Center : public LayoutNode {
     Center();
 
   private:
-    frameflow::NodeId init(LayoutNode *parent) override;
+    frameflow::NodeId init_(LayoutNode *parent) override;
 };
 
 struct HFlow : public LayoutNode {
     HFlow();
 
   private:
-    frameflow::NodeId init(LayoutNode *parent) override;
+    frameflow::NodeId init_(LayoutNode *parent) override;
 };
 
 struct VFlow : public LayoutNode {
     VFlow();
 
   private:
-    frameflow::NodeId init(LayoutNode *parent) override;
+    frameflow::NodeId init_(LayoutNode *parent) override;
 };

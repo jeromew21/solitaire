@@ -290,6 +290,11 @@ bool play_cards_to_foundation_if_needed(Solitaire &game) {
     if (!game.ruleset.auto_play_to_foundation) {
         return false;
     }
+    // Hacky, but we'll see if it works
+    if (game.lifted_cards.cards.size() > 0) {
+        return false;
+    }
+
     // Only can play a card to foundation if:
     // Foundations have all 4 of the card of the previous rank, or if the card is an Ace (rank 1)
     int highest_rank_in_foundations[4] = {0, 0, 0, 0};

@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <vector>
+#include <variant>
 
 struct Card {
     int rank; // 1-13 for Ace to King
@@ -38,6 +39,10 @@ struct GameRuleset {
         archive(num_tableau_piles, stock_to_waste_offset, allow_waste_to_recycle, allow_any_card_to_empty_tableau,
                 allow_undo, undo_plies, auto_play_to_foundation);
     }
+};
+
+
+struct SolitaireAction {
 };
 
 struct Solitaire {

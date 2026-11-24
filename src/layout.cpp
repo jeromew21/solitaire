@@ -4,16 +4,16 @@ CanvasLayer::CanvasLayer() {}
 
 void CanvasLayer::add_root_node(LayoutNode *node) {
     root_node = node;
-    root_node->node_id = frameflow::add_generic(&layout_system, frameflow::NullNode);
-    root_node->layout_system = &layout_system;
+    root_node->node_id_ = frameflow::add_generic(&layout_system, frameflow::NullNode);
+    root_node->layout_system_ = &layout_system;
 }
 
-void CanvasLayer::compute_layout() { frameflow::compute_layout(&layout_system, root_node->node_id); }
+void CanvasLayer::compute_layout() { frameflow::compute_layout(&layout_system, root_node->node_id_); }
 
 void LayoutNode::add_child(LayoutNode *child) {
     children.push_back(child);
-    child->layout_system = layout_system;
-    child->node_id = child->init(this);
+    child->layout_system_ = layout_system_;
+    child->node_id_ = child->init_(this);
 }
 
 void LayoutNode::add_child_with_margin(LayoutNode *child, float x) {
@@ -23,7 +23,7 @@ void LayoutNode::add_child_with_margin(LayoutNode *child, float x) {
     margin_node->anchors_fill();
 }
 
-frameflow::Rect LayoutNode::get_rect() { return frameflow::get_node(layout_system, node_id)->bounds; }
+frameflow::Rect LayoutNode::get_rect() { return frameflow::get_node(layout_system_, node_id_)->bounds; }
 
 Generic::Generic() {}
 
@@ -39,30 +39,30 @@ Margin::Margin(float top, float right, float bottom, float left) { margin_data =
 
 Center::Center() {}
 
-frameflow::NodeId Generic::init(LayoutNode *parent) { return frameflow::add_generic(layout_system, parent->node_id); }
+frameflow::NodeId Generic::init_(LayoutNode *parent) { return frameflow::add_generic(layout_system_, parent->node_id_); }
 
-frameflow::NodeId HFlow::init(LayoutNode *parent) {
+frameflow::NodeId HFlow::init_(LayoutNode *parent) {
     frameflow::FlowData flow_data{frameflow::Direction::Horizontal, frameflow::Align::Start};
-    return frameflow::add_flow(layout_system, parent->node_id, flow_data);
+    return frameflow::add_flow(layout_system_, parent->node_id_, flow_data);
 }
 
-frameflow::NodeId VFlow::init(LayoutNode *parent) {
+frameflow::NodeId VFlow::init_(LayoutNode *parent) {
     frameflow::FlowData flow_data{frameflow::Direction::Vertical, frameflow::Align::Start};
-    return frameflow::add_flow(layout_system, parent->node_id, flow_data);
+    return frameflow::add_flow(layout_system_, parent->node_id_, flow_data);
 }
 
-frameflow::NodeId HBox::init(LayoutNode *parent) {
+frameflow::NodeId HBox::init_(LayoutNode *parent) {
     frameflow::BoxData box_data{frameflow::Direction::Horizontal, frameflow::Align::Start};
-    return frameflow::add_box(layout_system, parent->node_id, box_data);
+    return frameflow::add_box(layout_system_, parent->node_id_, box_data);
 }
 
-frameflow::NodeId VBox::init(LayoutNode *parent) {
+frameflow::NodeId VBox::init_(LayoutNode *parent) {
     frameflow::BoxData box_data{frameflow::Direction::Vertical, frameflow::Align::Start};
-    return frameflow::add_box(layout_system, parent->node_id, box_data);
+    return frameflow::add_box(layout_system_, parent->node_id_, box_data);
 }
 
-frameflow::NodeId Margin::init(LayoutNode *parent) {
-    return frameflow::add_margin(layout_system, parent->node_id, margin_data);
+frameflow::NodeId Margin::init_(LayoutNode *parent) {
+    return frameflow::add_margin(layout_system_, parent->node_id_, margin_data);
 }
 
-frameflow::NodeId Center::init(LayoutNode *parent) { return frameflow::add_center(layout_system, parent->node_id); }
+frameflow::NodeId Center::init_(LayoutNode *parent) { return frameflow::add_center(layout_system_, parent->node_id_); }

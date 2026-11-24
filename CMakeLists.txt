@@ -42,6 +42,7 @@ target_precompile_headers(solitaire PRIVATE
   <algorithm>
   <random>
   <memory>
+  <variant>
   <iostream>
   <unordered_map>
   <unordered_set>
