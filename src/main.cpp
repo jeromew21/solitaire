@@ -589,6 +589,10 @@ int main(int argc, char *argv[]) {
     SetWindowMinSize(800, 600);
     SetTargetFPS(60);
 
+    BeginDrawing();
+    ClearBackground(BLACK);
+    EndDrawing();
+
     physfs_init(argv[0]);
 
     rlImGuiSetup(true);
