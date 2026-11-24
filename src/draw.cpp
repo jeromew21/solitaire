@@ -12,10 +12,10 @@
 
 #include <platform.h>
 #if PLATFORM_MACOS
-    #include <pthread.h>
+#include <pthread.h>
 #elif PLATFORM_WINDOWS
-    #define WIN32_LEAN_AND_MEAN
-    #include <windows.h>
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #endif
 
 namespace {
@@ -131,15 +131,19 @@ void init_card_images_v1(std::atomic<bool> &is_loading, std::atomic<int> &progre
     }
 
     unsigned int numWorkers = get_worker_thread_count();
-    spdlog::info("Using {} threads for loading images.\n", numWorkers);
+    spdlog::info("Using {} threads for loading images.", numWorkers);
 
     // Heap-allocated so it outlives init_card_images_v1() while detached threads run
     auto nextJobIndex = std::make_shared<std::atomic<size_t>>(0);
 
     for (unsigned int w = 0; w < numWorkers; ++w) {
-        std::thread([nextJobIndex, &progress]() {
+        std::thread([nextJobIndex, &is_loading, &progress]() {
             boost_thread_priority();
             while (true) {
+                if (progress.load(std::memory_order_acquire) >= (int)asset_jobs.size()) {
+                    is_loading.store(false, std::memory_order_release);
+                    break;
+                }
                 size_t idx = nextJobIndex->fetch_add(1, std::memory_order_relaxed);
                 if (idx >= asset_jobs.size())
                     break;

@@ -729,9 +729,6 @@ int main(int argc, char *argv[]) {
 
                 ClearBackground(BLACK);
                 EndDrawing();
-                if (loading_progress.load(std::memory_order_acquire) >= 60) {
-                    is_loading_images = false;
-                }
                 continue;
             } else {
                 init_card_textures_v1();
