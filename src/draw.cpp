@@ -6,21 +6,39 @@
 #include <raylib.h>
 
 #include <array>
+#include <thread>
+#include <memory>
 
 namespace {
+
+struct AssetJob {
+    std::string path{};
+    Image image;
+    Texture2D texture;
+
+    bool is_card{true};
+    int id{};
+};
+
+std::vector<AssetJob> asset_jobs;
+
 std::array<Texture2D, 52> card_texture_cache_v1_;
 
 std::array<Texture2D, 8> card_back_texture_cache_v1_;
 } // namespace
 
-Texture2D load_texture_from_disk(const char *path) {
+Image load_image_from_disk(const char *path) {
     const auto bytes = physfs_read_file(path);
     if (bytes.empty())
         return {};
 
     Image image = LoadImageFromMemory(".png", bytes.data(), static_cast<int>(bytes.size()));
-    if (!image.data)
-        return {};
+    ImageResize(&image, image.width * 4, image.height * 4); // double the size of the image
+    return image;
+}
+
+Texture2D load_texture_from_disk(const char *path) {
+    Image image = load_image_from_disk(path);
 
     Texture2D texture = LoadTextureFromImage(image);
     UnloadImage(image);
@@ -67,18 +85,63 @@ const char *card_to_path_v1(const Card &card) {
 
 Texture2D card_to_texture_v1(const Card &card) { return card_texture_cache_v1_[card.suit * 13 + (card.rank - 1)]; }
 
-void init_card_texture_cache_v1() {
+void init_card_images_v1(std::atomic<bool> &is_loading, std::atomic<int> &progress) {
+    asset_jobs.clear();
+    asset_jobs.reserve(60); // Prevents reallocations while populating
+
     for (int suit = 0; suit < 4; ++suit) {
         for (int rank = 1; rank <= 13; ++rank) {
             Card card{rank, suit};
             const char *path = card_to_path_v1(card);
-            card_texture_cache_v1_[suit * 13 + (rank - 1)] = load_texture_from_disk(path);
+            asset_jobs.push_back({.path = path, .image = {}, .texture = {}, .is_card = true, .id = suit * 13 + (rank - 1)});
         }
     }
 
     for (int i = 1; i <= 8; ++i) {
         std::string back_path = fmt::format("v1/Casino/Cards/back0{}.png", i);
-        card_back_texture_cache_v1_[i - 1] = load_texture_from_disk(back_path.c_str());
+        asset_jobs.push_back({.path = back_path, .image = {}, .texture = {}, .is_card = false, .id = i - 1});
+    }
+
+    unsigned int coreCount = std::thread::hardware_concurrency();
+    unsigned int numWorkers = std::min(16u, std::max(1u, coreCount > 1 ? coreCount - 1 : 1u));
+    fmt::print("Detected {} CPU cores, using {} threads for loading images.\n", coreCount, numWorkers);
+
+    // Heap-allocated so it outlives init_card_images_v1() while detached threads run
+    auto nextJobIndex = std::make_shared<std::atomic<size_t>>(0);
+
+    for (unsigned int w = 0; w < numWorkers; ++w) {
+        std::thread([nextJobIndex, &progress]() {
+            while (true) {
+                size_t idx = nextJobIndex->fetch_add(1, std::memory_order_relaxed);
+                if (idx >= asset_jobs.size())
+                    break;
+
+                Image img = load_image_from_disk(asset_jobs[idx].path.c_str());
+                if (img.data != nullptr) {
+                    ImageResize(&img, img.width * 2, img.height * 2);
+                }
+
+                asset_jobs[idx].image = img;
+
+                // Release semantics ensure asset_jobs[idx].image is visible to the main thread
+                progress.fetch_add(1, std::memory_order_release);
+            }
+        }).detach();
+    }
+}
+
+void init_card_textures_v1() {
+    for (auto &job : asset_jobs) {
+        job.texture = LoadTextureFromImage(job.image);
+        UnloadImage(job.image);
+        GenTextureMipmaps(&job.texture);
+        SetTextureFilter(job.texture, TEXTURE_FILTER_ANISOTROPIC_16X);
+
+        if (job.is_card) {
+            card_texture_cache_v1_[job.id] = job.texture;
+        } else {
+            card_back_texture_cache_v1_[job.id] = job.texture;
+        }
     }
 }
 

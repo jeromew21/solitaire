@@ -15,6 +15,7 @@
 #include <spdlog/spdlog.h>
 
 #include <array>
+#include <atomic>
 
 namespace {
 constexpr float CARD_WIDTH = 11.0f;
@@ -118,15 +119,15 @@ void animate_flip_stock_to_waste(Solitaire &game) {
             auto &animated_card = animated_cards[card.suit * 13 + (card.rank - 1)];
             animated_card.active = true;
             animated_card.face_up = false;
-            animated_card.x = waste_bounder->get_rect().origin.x + waste_bounder->get_rect().size.x / 2.f +
-                              card_stacking_offset * i;
-            animated_card.y = waste_bounder->get_rect().origin.y + waste_bounder->get_rect().size.y / 2.f +
-                              card_stacking_offset * i;
+            animated_card.x =
+                waste_bounder->get_rect().origin.x + waste_bounder->get_rect().size.x / 2.f + card_stacking_offset * i;
+            animated_card.y =
+                waste_bounder->get_rect().origin.y + waste_bounder->get_rect().size.y / 2.f + card_stacking_offset * i;
 
-            float target_x = stock_bounder->get_rect().origin.x + stock_bounder->get_rect().size.x / 2.f +
-                             card_stacking_offset * i;
-            float target_y = stock_bounder->get_rect().origin.y + stock_bounder->get_rect().size.y / 2.f +
-                             card_stacking_offset * i;
+            float target_x =
+                stock_bounder->get_rect().origin.x + stock_bounder->get_rect().size.x / 2.f + card_stacking_offset * i;
+            float target_y =
+                stock_bounder->get_rect().origin.y + stock_bounder->get_rect().size.y / 2.f + card_stacking_offset * i;
 
             TweenManager::get()
                 .create_tween(&animated_card.y, target_y, 0.2f, Easing::EaseInOutQuad)
@@ -506,7 +507,6 @@ int main(int argc, char *argv[]) {
     InitWindow(1280, 720, "Solitaire: House Rules");
     SetWindowMinSize(800, 600);
     SetTargetFPS(60);
-    SetExitKey(KEY_NULL); // disable default exit
 
     physfs_init(argv[0]);
 
@@ -536,13 +536,13 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    init_card_texture_cache_v1();
+    std::atomic<bool> is_loading_images = true;
+    std::atomic<int> loading_progress = 0;
+    init_card_images_v1(is_loading_images, loading_progress);
 
     PersistentContext ctx;
     bool load_result = load_game(ctx);
     if (load_result) {
-        // debug print saved window size
-        fmt::print("Loaded saved window size: {}x{}\n", ctx.window_width, ctx.window_height);
         SetWindowSize(ctx.window_width, ctx.window_height);
         if (ctx.is_window_maximized) {
             MaximizeWindow();
@@ -627,8 +627,34 @@ int main(int argc, char *argv[]) {
     const Color bg_color = {0x1F, 0x3F, 0x5F, 0xFF};
 
     bool want_quit = false;
+    bool is_loading = true;
 
     while (!WindowShouldClose() && !want_quit) {
+        // show loading screen
+        if (is_loading) {
+            if (is_loading_images) {
+                BeginDrawing();
+
+                std::string wins_text = fmt::format("Loaded images: {}/60", loading_progress.load());
+                auto text_size = MeasureTextEx(hud_font, wins_text.c_str(), (float)hud_logical_font_size, 0.0f);
+                Vector2 pos = {floorf(GetScreenWidth() - text_size.x - 24.0f), floorf(24.0f)};
+                DrawTextEx(hud_font, wins_text.c_str(), {pos.x + 1.0f, pos.y + 1.0f}, (float)hud_logical_font_size,
+                           0.0f, Fade(BLACK, 0.7f));
+                DrawTextEx(hud_font, wins_text.c_str(), pos, (float)hud_logical_font_size, 0.0f, WHITE);
+
+                ClearBackground(BLACK);
+                EndDrawing();
+                if (loading_progress.load(std::memory_order_acquire) >= 60) {
+                    is_loading_images = false;
+                }
+                continue;
+            } else {
+                init_card_textures_v1();
+                SetExitKey(KEY_NULL); // disable default exit
+                is_loading = false;
+            }
+        }
+
         TweenManager::get().update(GetFrameTime());
 
         rlImGuiBegin();
