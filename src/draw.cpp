@@ -132,7 +132,7 @@ void init_card_images_v1(std::atomic<bool> &is_loading, std::atomic<int> &progre
 
     unsigned int num_workers = get_worker_thread_count();
     spdlog::info("Using {} threads for loading images.", num_workers);
-    if constexpr (NDEBUG) {
+    if constexpr (ANVIL_RELEASE_MODE) {
         spdlog::info("Loading images at 4x resolution for production build.");
     } else {
         spdlog::info("Loading images at 2x resolution for debug build.");
@@ -155,7 +155,7 @@ void init_card_images_v1(std::atomic<bool> &is_loading, std::atomic<int> &progre
 
                 Image img = load_image_from_disk(asset_jobs[index].path.c_str());
                 if (img.data != nullptr) {
-                    if constexpr (NDEBUG) {
+                    if constexpr (ANVIL_RELEASE_MODE) {
                         ImageResize(&img, img.width * 4, img.height * 4);
                     } else {
                         ImageResize(&img, img.width * 2, img.height * 2);
