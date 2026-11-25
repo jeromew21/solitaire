@@ -1,8 +1,17 @@
 #pragma once
 
+#include <cassert>
 #include <optional>
 #include <variant>
 #include <vector>
+
+// Standard boilerplate to combine multiple lambdas into one visitor
+template <class... Ts> struct overloaded : Ts... {
+    using Ts::operator()...;
+};
+
+// Deduction guide (needed in C++17, automatic in C++20)
+template <class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
 struct Card {
     int rank; // 1-13 for Ace to King
@@ -31,7 +40,7 @@ struct GameRuleset {
     int stock_to_waste_offset = 1;               // offset for flipping stock to waste
     bool allow_waste_to_recycle = true;          // allow recycling waste back to stock
     bool allow_any_card_to_empty_tableau = true; // allow any card to be placed on empty tableau piles
-    bool allow_undo = false;                     // allow undoing moves
+    bool allow_undo = true;                     // allow undoing moves
     int undo_plies = 0;                          // number of undos allowed, 0 for unlimited
     bool auto_play_to_foundation = true;         // automatically play cards to foundation when possible
 
@@ -41,7 +50,38 @@ struct GameRuleset {
     }
 };
 
-struct SolitaireAction {};
+struct Solitaire;
+
+struct FlipStockToWasteAction {
+    int num_cards_flipped = 0; // number of cards flipped from stock to waste
+
+    void make(Solitaire &game) const;
+
+    void unmake(Solitaire &game) const;
+    template <typename T> void serialize(T &archive) { archive(num_cards_flipped); }
+};
+
+struct WasteToTableauAction {
+    void make(Solitaire &game) const;
+    void unmake(Solitaire &game) const;
+    template <typename T> void serialize(T &archive) { }
+};
+
+struct TableauToTableauAction {
+    void make(Solitaire &game) const;
+    void unmake(Solitaire &game) const;
+    template <typename T> void serialize(T &archive) {  }
+};
+
+struct SolitaireAction {
+    std::variant<FlipStockToWasteAction, WasteToTableauAction, TableauToTableauAction> action;
+
+    void unmake(Solitaire &game) const;
+
+    void make(Solitaire &game) const;
+
+    template <typename T> void serialize(T &archive) { archive(action); }
+};
 
 struct Solitaire {
     std::vector<Card> stock;
@@ -49,6 +89,7 @@ struct Solitaire {
     std::vector<Card> waste;
 
     std::vector<std::vector<Card>> tableau; // default 7 piles
+
     std::vector<int> tableau_face_down;
 
     std::vector<std::vector<Card>> foundation; // default 4 piles
@@ -57,9 +98,15 @@ struct Solitaire {
 
     GameRuleset ruleset; // should not be changed
 
+    std::vector<SolitaireAction> action_history; // for undo functionality
+
     template <typename T> void serialize(T &archive) {
-        archive(stock, waste, tableau, tableau_face_down, foundation, lifted_cards, ruleset);
+        archive(stock, waste, tableau, tableau_face_down, foundation, lifted_cards, ruleset, action_history);
     }
+
+    bool do_action(const SolitaireAction &action);
+
+    bool undo_last_action();
 
     bool is_winning() const {
         for (const auto &pile : foundation) {
@@ -72,31 +119,7 @@ struct Solitaire {
 
     bool is_lifting() const { return !lifted_cards.cards.empty(); }
 
-    void flip_one_stock_to_waste() {
-        if (stock.empty() && ruleset.allow_waste_to_recycle) {
-            std::reverse(waste.begin(), waste.end());
-            stock = std::move(waste);
-            waste.clear();
-        } else {
-            Card card = stock.back();
-            stock.pop_back();
-            waste.push_back(card);
-        }
-    }
-
-    void flip_stock_to_waste() {
-        if (stock.empty() && ruleset.allow_waste_to_recycle) {
-            std::reverse(waste.begin(), waste.end());
-            stock = std::move(waste);
-            waste.clear();
-        } else {
-            for (int i = 0; i < ruleset.stock_to_waste_offset && !stock.empty(); ++i) {
-                Card card = stock.back();
-                stock.pop_back();
-                waste.push_back(card);
-            }
-        }
-    }
+    void flip_stock_to_waste();
 
     bool can_drop_into_foundation(const Card &card, int foundation_index) const {
         if (foundation_index < 0 || foundation_index >= (int)foundation.size()) {

@@ -164,7 +164,9 @@ void animate_flip_stock_to_waste(Solitaire &game) {
                 animated_card.active = false;
                 is_animating = false;
             });
-    } else {
+    }
+        /*
+    else {
         const float travel_time = 0.2f;
         const float delay_base = 0.45f;
         TweenManager::get()
@@ -200,6 +202,7 @@ void animate_flip_stock_to_waste(Solitaire &game) {
                 });
         }
     }
+    */
 }
 
 void handle_press(Solitaire &game) {
@@ -888,6 +891,23 @@ int main(int argc, char *argv[]) {
         if (IsKeyPressed(KEY_Q)) {
             want_quit = true;
         }
+
+        // Ctrl-N for new game
+        if (!ImGui::GetIO().WantCaptureKeyboard && IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_N)) {
+            new_game(ctx);
+        }
+
+        // Ctrl-Z for undo
+        if (!ImGui::GetIO().WantCaptureKeyboard && IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_Z)) {
+            if (game.ruleset.allow_undo) {
+                if (game.undo_last_action()) {
+                    spdlog::info("Undo successful");
+                } else {
+                    spdlog::info("Undo failed");
+                }
+            }
+        }
+
         rlImGuiEnd();
         EndDrawing();
     }

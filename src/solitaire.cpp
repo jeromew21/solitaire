@@ -3,6 +3,7 @@
 #include <cereal/archives/portable_binary.hpp>
 #include <cereal/types/optional.hpp>
 #include <cereal/types/vector.hpp>
+#include <cereal/types/variant.hpp>
 #include <physfs.h>
 #include <spdlog/spdlog.h>
 
@@ -86,4 +87,70 @@ std::vector<Card> create_deck() {
     std::random_device rd;
 
     return create_deck(rd());
+}
+
+void Solitaire::flip_stock_to_waste() {
+    FlipStockToWasteAction flip_action{ruleset.stock_to_waste_offset};
+    do_action(SolitaireAction{flip_action});
+}
+
+void FlipStockToWasteAction::make(Solitaire &game) const {
+    for (int i = 0; i < num_cards_flipped; ++i) {
+        if (game.stock.empty() && game.ruleset.allow_waste_to_recycle) {
+            std::reverse(game.waste.begin(), game.waste.end());
+            game.stock = std::move(game.waste);
+            game.waste.clear();
+        } else {
+            Card card = game.stock.back();
+            game.stock.pop_back();
+            game.waste.push_back(card);
+        }
+    }
+}
+
+void FlipStockToWasteAction::unmake(Solitaire &game) const {
+    for (int i = 0; i < num_cards_flipped; ++i) {
+        if (game.waste.empty()) {
+            break;
+        }
+        Card card = game.waste.back();
+        game.waste.pop_back();
+        game.stock.push_back(card);
+    }
+}
+
+void WasteToTableauAction::make(Solitaire &game) const {}
+
+void TableauToTableauAction::make(Solitaire &game) const {}
+
+void WasteToTableauAction::unmake(Solitaire &game) const {}
+
+void TableauToTableauAction::unmake(Solitaire &game) const {}
+
+void SolitaireAction::unmake(Solitaire &game) const {
+    std::visit([&game](auto &&action) { action.unmake(game); }, action);
+}
+
+void SolitaireAction::make(Solitaire &game) const {
+    std::visit([&game](auto &&action) { action.make(game); }, action);
+}
+
+bool Solitaire::do_action(const SolitaireAction &action) {
+    std::visit([&game = *this](auto &&action) { action.make(game); }, action.action);
+    action_history.push_back(action);
+    return true;
+}
+
+bool Solitaire::undo_last_action() {
+    assert(ruleset.allow_undo);
+    if (action_history.empty()) {
+        return false;
+    }
+
+    auto &last_action = action_history.back();
+    action_history.pop_back();
+
+    last_action.unmake(*this);
+
+    return true;
 }
