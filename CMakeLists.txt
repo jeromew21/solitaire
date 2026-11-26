@@ -29,6 +29,7 @@ add_executable(solitaire ${TARGET_SOURCES})
 target_precompile_headers(solitaire PRIVATE
   <vector>
   <array>
+  <deque>
   <string>
   <optional>
   <cassert>

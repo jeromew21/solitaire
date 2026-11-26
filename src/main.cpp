@@ -16,24 +16,31 @@
 
 #include <array>
 #include <atomic>
+#include <deque>
 
 namespace {
-constexpr float CARD_WIDTH = 11.0f;
-constexpr float CARD_HEIGHT = 16.0f;
-constexpr float CARD_SCALE = 8.0f;
-
-const float card_stacking_offset = 0.1f;
-const float card_tableau_offset = 5.f * CARD_SCALE;
+float get_card_scale() { return 8.0f; }
 
 struct AnimatedCard {
     Card card;
-    bool active{false};
-    float x;
-    float y;
-    // float target_x;
-    // float target_y;
-    bool face_up;
+    Vector2 position{0.f, 0.f};
+    Vector2 target_position{0.f, 0.f};
+    bool face_up{false};
 };
+
+struct Animation {
+    std::vector<int> cards;
+    Vector2 target_position;
+};
+
+std::deque<Animation> command_queue;
+std::optional<Animation> current_animation;
+
+constexpr float CARD_WIDTH = 11.0f;
+constexpr float CARD_HEIGHT = 16.0f;
+
+const float card_stacking_offset = 0.01f * get_card_scale();
+const float card_tableau_offset = 5.f * get_card_scale();
 
 std::array<AnimatedCard, 52> animated_cards;
 
@@ -47,25 +54,66 @@ struct LayoutContext {
 
 LayoutContext layout_context;
 
-void new_game(PersistentContext &ctx) {
-    GameRuleset &ruleset = ctx.ruleset;
-    Solitaire game;
-    game.ruleset = ruleset; // Use the current ruleset from the context
-    game.stock = create_deck();
-    game.tableau.resize(ruleset.num_tableau_piles);
-    game.tableau_face_down.resize(ruleset.num_tableau_piles);
-    game.foundation.resize(4); // 4 piles for foundation
+Vector2 get_target_position(LayoutNode *node) {
+    const frameflow::Rect rect = node->get_rect();
+    return {rect.origin.x + rect.size.x / 2.f, rect.origin.y + rect.size.y / 2.f};
+}
 
-    // set up tableau piles
-    for (int i = 0; i < (int)game.tableau.size(); ++i) {
-        for (int j = 0; j <= i; ++j) {
-            game.tableau[i].push_back(game.stock.back());
-            game.tableau_face_down[i] = j; // all cards are face down except the last one
-            game.stock.pop_back();
-        }
+void init_game_card_positions(Solitaire &game) {
+    // Initialize animated cards with their initial positions and face-up states
+    for (const auto &card : game.get_stock().cards) {
+        animated_cards[card.id()] = AnimatedCard{.card = card,
+                                                 .position = get_target_position(layout_context.stock_bounder),
+                                                 .target_position = get_target_position(layout_context.stock_bounder),
+                                                 .face_up = false};
     }
 
-    ctx.game = game;
+    for (const auto &card : game.get_waste().cards) {
+        animated_cards[card.id()] = AnimatedCard{.card = card,
+                                                 .position = get_target_position(layout_context.waste_bounder),
+                                                 .target_position = get_target_position(layout_context.waste_bounder),
+                                                 .face_up = true};
+    }
+    for (int i = 0; i < 4; ++i) {
+        const auto &foundation = game.get_foundation(i);
+        for (const auto &card : foundation.cards) {
+            animated_cards[card.id()] =
+                AnimatedCard{.card = card,
+                             .position = get_target_position(layout_context.foundation_bounders[i]),
+                             .target_position = get_target_position(layout_context.foundation_bounders[i]),
+                             .face_up = true};
+        }
+    }
+    for (int i = 0; i < 7; ++i) {
+        const auto &tableau = game.get_tableau(i);
+        int k = 0;
+        for (const auto &card : tableau.cards) {
+            auto animated_card =
+                AnimatedCard{.card = card,
+                             .position = get_target_position(layout_context.tableau_bounders[i]),
+                             .target_position = get_target_position(layout_context.tableau_bounders[i]),
+                             .face_up = true};
+            animated_card.position.y += k * card_tableau_offset;
+            animated_cards[card.id()] = animated_card;
+            k++;
+        }
+    }
+}
+
+void new_game(PersistentContext &ctx) {
+    command_queue.clear();
+    current_animation.reset();
+
+    GameRuleset &ruleset = ctx.ruleset;
+    ctx.game = Solitaire{};
+    ctx.game->reset(ruleset);
+    auto &game = *ctx.game;
+    init_game_card_positions(game);
+
+    spdlog::info("Started a new game with ruleset: stock_to_waste_offset={}, allow_waste_to_recycle={}, "
+                 "allow_any_card_to_empty_tableau={}, allow_undo={}, undo_plies={}, auto_play_to_foundation={}",
+                 ruleset.stock_to_waste_offset, ruleset.allow_waste_to_recycle, ruleset.allow_any_card_to_empty_tableau,
+                 ruleset.allow_undo, ruleset.undo_plies, ruleset.auto_play_to_foundation);
 }
 
 ImFont *load_imgui_font_from_disk(const char *path, float size, ImFontConfig *config = nullptr) {
@@ -84,357 +132,9 @@ ImFont *load_imgui_font_from_disk(const char *path, float size, ImFontConfig *co
 }
 
 bool point_inside_rect(float px, float py, const frameflow::Rect &rect) {
-    int fuzzy_threshold = 16.0f; // Adjust this value to make the hitbox larger or smaller
+    int fuzzy_threshold = 2.0f * get_card_scale(); // Adjust this value to make the hitbox larger or smaller
     return (px >= rect.origin.x - fuzzy_threshold && px <= rect.origin.x + rect.size.x + fuzzy_threshold &&
             py >= rect.origin.y - fuzzy_threshold && py <= rect.origin.y + rect.size.y + fuzzy_threshold);
-}
-
-CardDrawParams params_from_bounder(const frameflow::Rect &bounder, bool face_up) {
-    return CardDrawParams{.x = bounder.origin.x + bounder.size.x / 2.f,
-                          .y = bounder.origin.y + bounder.size.y / 2.f,
-                          .width = bounder.size.x,
-                          .height = bounder.size.y,
-                          .rotation = 0.f,
-                          .face_up = face_up};
-}
-
-void animate_flip_stock_to_waste(Solitaire &game) {
-    auto stock_bounder = layout_context.stock_bounder;
-    auto waste_bounder = layout_context.waste_bounder;
-    static bool is_animating = false;
-
-    if (is_animating) {
-        return;
-    }
-
-    if (game.stock.empty()) {
-        if (!game.ruleset.allow_waste_to_recycle) {
-            return;
-        }
-        is_animating = true;
-        auto waste_copy = game.waste; // make a copy of the waste to animate
-        game.flip_stock_to_waste();
-        for (int i = 0; i < (int)waste_copy.size(); ++i) {
-            Card card = waste_copy[i];
-            auto &animated_card = animated_cards[card.suit * 13 + (card.rank - 1)];
-            animated_card.active = true;
-            animated_card.face_up = false;
-            animated_card.x =
-                waste_bounder->get_rect().origin.x + waste_bounder->get_rect().size.x / 2.f + card_stacking_offset * i;
-            animated_card.y =
-                waste_bounder->get_rect().origin.y + waste_bounder->get_rect().size.y / 2.f + card_stacking_offset * i;
-
-            float target_x =
-                stock_bounder->get_rect().origin.x + stock_bounder->get_rect().size.x / 2.f + card_stacking_offset * i;
-            float target_y =
-                stock_bounder->get_rect().origin.y + stock_bounder->get_rect().size.y / 2.f + card_stacking_offset * i;
-
-            TweenManager::get()
-                .create_tween(&animated_card.y, target_y, 0.2f, Easing::EaseInOutQuad)
-                ->delay(i * 0.05)
-                ->on_complete([&animated_card]() { animated_card.active = false; });
-            TweenManager::get().create_tween(&animated_card.x, target_x, 0.5f, Easing::EaseInOutQuad);
-        }
-        TweenManager::get().create_timer(0.2f + (waste_copy.size() - 1) * 0.05f)->on_complete([]() {
-            is_animating = false;
-        });
-        return;
-    }
-
-    is_animating = true;
-
-    if (game.ruleset.stock_to_waste_offset == 1) {
-        Card card = game.stock.back();
-        auto &animated_card = animated_cards[card.suit * 13 + (card.rank - 1)];
-        animated_card.active = true;
-        animated_card.face_up = true;
-        animated_card.x = stock_bounder->get_rect().origin.x + stock_bounder->get_rect().size.x / 2.f;
-        animated_card.y = stock_bounder->get_rect().origin.y + stock_bounder->get_rect().size.y / 2.f;
-
-        float target_x = waste_bounder->get_rect().origin.x + waste_bounder->get_rect().size.x / 2.f +
-                         card_stacking_offset * (game.waste.size() + 1);
-        float target_y = waste_bounder->get_rect().origin.y + waste_bounder->get_rect().size.y / 2.f +
-                         card_stacking_offset * (game.waste.size() + 1);
-
-        TweenManager::get().create_tween(&animated_card.y, target_y, 0.2f, Easing::EaseInOutQuad);
-        TweenManager::get()
-            .create_tween(&animated_card.x, target_x, 0.2f, Easing::EaseInOutQuad)
-            ->on_complete([&game, &animated_card]() {
-                game.flip_stock_to_waste();
-                animated_card.active = false;
-                is_animating = false;
-            });
-    }
-        /*
-    else {
-        const float travel_time = 0.2f;
-        const float delay_base = 0.45f;
-        TweenManager::get()
-            .create_timer(travel_time + (game.ruleset.stock_to_waste_offset - 1) * delay_base)
-            ->on_complete([]() { is_animating = false; });
-        auto stock_copy = game.stock;
-        for (int i = 0; i < game.ruleset.stock_to_waste_offset; i++) {
-            if (stock_copy.empty()) {
-                break;
-            }
-            Card card = stock_copy.back();
-            stock_copy.pop_back();
-            auto &animated_card = animated_cards[card.suit * 13 + (card.rank - 1)];
-            animated_card.active = true;
-            animated_card.face_up = true;
-            animated_card.x = stock_bounder->get_rect().origin.x + stock_bounder->get_rect().size.x / 2.f;
-            animated_card.y = stock_bounder->get_rect().origin.y + stock_bounder->get_rect().size.y / 2.f;
-
-            float target_x = waste_bounder->get_rect().origin.x + waste_bounder->get_rect().size.x / 2.f +
-                             card_stacking_offset * (game.waste.size() + 1);
-            float target_y = waste_bounder->get_rect().origin.y + waste_bounder->get_rect().size.y / 2.f +
-                             card_stacking_offset * (game.waste.size() + 1);
-
-            TweenManager::get()
-                .create_tween(&animated_card.y, target_y, travel_time, Easing::EaseInOutQuad)
-                ->delay(i * delay_base);
-            TweenManager::get()
-                .create_tween(&animated_card.x, target_x, travel_time, Easing::EaseInOutQuad)
-                ->delay(i * delay_base)
-                ->on_complete([&game, &animated_card]() {
-                    animated_card.active = false;
-                    game.flip_one_stock_to_waste();
-                });
-        }
-    }
-    */
-}
-
-void handle_press(Solitaire &game) {
-    const Vector2 mouse_pos = GetMousePosition();
-    auto stock_bounder = layout_context.stock_bounder;
-    auto waste_bounder = layout_context.waste_bounder;
-    auto &tableau_bounders = layout_context.tableau_bounders;
-
-    bool clicked_on_stock = point_inside_rect(mouse_pos.x, mouse_pos.y, stock_bounder->get_rect());
-    bool clicked_on_waste = point_inside_rect(mouse_pos.x, mouse_pos.y, waste_bounder->get_rect());
-    if (clicked_on_stock) {
-        animate_flip_stock_to_waste(game);
-        return;
-    } else if (clicked_on_waste && !game.waste.empty()) {
-        const float center_x = waste_bounder->get_rect().origin.x + waste_bounder->get_rect().size.x / 2.f;
-        const float center_y = waste_bounder->get_rect().origin.y + waste_bounder->get_rect().size.y / 2.f;
-        game.lifted_cards.cards.push_back(game.waste.back());
-        game.lifted_cards.is_waste = true;
-        game.lifted_cards.x_offset = mouse_pos.x - center_x;
-        game.lifted_cards.y_offset = mouse_pos.y - center_y;
-        game.waste.pop_back();
-        return;
-    }
-
-    // Check if the mouse is over any tableau pile
-    for (int i = 0; i < (int)game.tableau.size(); ++i) {
-        auto rect = tableau_bounders[i]->get_rect();
-        rect.size.y += card_tableau_offset * (game.tableau[i].size() - 1);
-        bool mouse_over_tableau = point_inside_rect(mouse_pos.x, mouse_pos.y, rect);
-        if (mouse_over_tableau && !game.tableau[i].empty()) {
-            // Determine which card in the tableau pile was clicked
-            int card_index = (int)((mouse_pos.y - rect.origin.y) / card_tableau_offset);
-            if (card_index >= (int)game.tableau[i].size()) {
-                card_index = (int)game.tableau[i].size() - 1;
-            }
-
-            bool is_face_up = card_index >= game.tableau_face_down[i];
-            if (!is_face_up) {
-                break;
-            }
-
-            if (!game.can_pick_up_stack_from_tableau(game.tableau[i], card_index)) {
-                break; // Can't pick up this stack, so don't lift any cards
-            }
-
-            // Lift the cards from the clicked index to the top of the pile
-            auto card_rect = tableau_bounders[i]->get_rect();
-            card_rect.origin.y += card_tableau_offset * card_index;
-            const float center_x = card_rect.origin.x + card_rect.size.x / 2.f;
-            const float center_y = card_rect.origin.y + card_rect.size.y / 2.f;
-            game.lifted_cards.cards.insert(game.lifted_cards.cards.end(), game.tableau[i].begin() + card_index,
-                                           game.tableau[i].end());
-            game.lifted_cards.is_waste = false;
-            game.lifted_cards.is_tableau = true;
-            game.lifted_cards.tableau_index = i;
-            game.lifted_cards.x_offset = mouse_pos.x - center_x;
-            game.lifted_cards.y_offset = mouse_pos.y - center_y;
-            game.tableau[i].erase(game.tableau[i].begin() + card_index, game.tableau[i].end());
-            return;
-        }
-    }
-}
-
-void handle_drop(Solitaire &game) {
-    auto mouse_pos = GetMousePosition();
-    auto &foundation_bounders = layout_context.foundation_bounders;
-    auto &tableau_bounders = layout_context.tableau_bounders;
-    if (game.lifted_cards.cards.size() == 1) {
-        bool mouse_over_foundation[4];
-        for (int i = 0; i < 4; ++i) {
-            mouse_over_foundation[i] =
-                point_inside_rect(GetMousePosition().x, GetMousePosition().y, foundation_bounders[i]->get_rect());
-        }
-        for (int i = 0; i < 4; ++i) {
-            if (mouse_over_foundation[i] && game.can_drop_into_foundation(game.lifted_cards.cards.back(), i)) {
-                game.foundation[i].push_back(game.lifted_cards.cards.back());
-                game.lifted_cards.cards.clear();
-                return;
-            }
-        }
-    }
-
-    // Check if the mouse is over any tableau pile
-    for (int i = 0; i < (int)game.tableau.size(); ++i) {
-        auto rect = tableau_bounders[i]->get_rect();
-        rect.size.y += card_tableau_offset * (game.tableau[i].size() - 1);
-        bool mouse_over_tableau = point_inside_rect(mouse_pos.x, mouse_pos.y, rect);
-        if (mouse_over_tableau) {
-            if (game.can_drop_stack_onto_tableau(game.lifted_cards.cards, i)) {
-                game.tableau[i].insert(game.tableau[i].end(), game.lifted_cards.cards.begin(),
-                                       game.lifted_cards.cards.end());
-                game.lifted_cards.cards.clear();
-                return;
-            }
-        }
-    }
-
-    if (game.lifted_cards.is_waste) {
-        game.waste.insert(game.waste.end(), game.lifted_cards.cards.begin(), game.lifted_cards.cards.end());
-    } else if (game.lifted_cards.is_tableau) {
-        game.tableau[game.lifted_cards.tableau_index].insert(game.tableau[game.lifted_cards.tableau_index].end(),
-                                                             game.lifted_cards.cards.begin(),
-                                                             game.lifted_cards.cards.end());
-    }
-    game.lifted_cards.cards.clear();
-}
-
-void reveal_tableau_cards_if_needed(Solitaire &game) {
-    for (int i = 0; i < (int)game.tableau.size(); ++i) {
-        if (!game.tableau[i].empty() && game.tableau_face_down[i] == (int)game.tableau[i].size()) {
-            // Reveal the top card of the tableau pile
-            game.tableau_face_down[i]--;
-        }
-    }
-}
-
-bool play_cards_to_foundation_if_needed(Solitaire &game) {
-    auto foundation_bounders = layout_context.foundation_bounders;
-    auto waste_bounder = layout_context.waste_bounder;
-    static bool is_animating = false;
-    if (is_animating) {
-        return false;
-    }
-    if (!game.ruleset.auto_play_to_foundation) {
-        return false;
-    }
-    // Hacky, but we'll see if it works
-    if (game.lifted_cards.cards.size() > 0) {
-        return false;
-    }
-
-    // Only can play a card to foundation if:
-    // Foundations have all 4 of the card of the previous rank, or if the card is an Ace (rank 1)
-    int highest_rank_in_foundations[4] = {0, 0, 0, 0};
-    for (int i = 0; i < 4; ++i) {
-        if (!game.foundation[i].empty()) {
-            highest_rank_in_foundations[i] = game.foundation[i].back().rank;
-        }
-    }
-    int highest_rank_temp = 0;
-    for (int i = 1; i <= 13; i++) {
-        int count_of_rank = 0;
-        for (int j = 0; j < 4; ++j) {
-            if (highest_rank_in_foundations[j] >= i) {
-                count_of_rank++;
-            }
-        }
-        if (count_of_rank == 4) {
-            highest_rank_temp = i;
-        }
-    }
-    const int highest_rank = highest_rank_temp; // The highest rank that has all 4 cards in the foundations
-
-    bool waste = [&]() {
-        if (game.waste.empty()) {
-            return false;
-        }
-        Card top_waste_card = game.waste.back();
-        if (top_waste_card.rank != highest_rank + 1) {
-            return false;
-        }
-        for (int i = 0; i < 4; ++i) {
-            if (!game.can_drop_into_foundation(top_waste_card, i)) {
-                continue;
-            }
-            auto card = game.waste.back();
-            game.waste.pop_back();
-            auto &animated_card = animated_cards[top_waste_card.suit * 13 + (top_waste_card.rank - 1)];
-            animated_card.active = true;
-            animated_card.face_up = true;
-            animated_card.x = waste_bounder->get_rect().origin.x + waste_bounder->get_rect().size.x / 2.f;
-            animated_card.y = waste_bounder->get_rect().origin.y + waste_bounder->get_rect().size.y / 2.f;
-            float target_x =
-                foundation_bounders[i]->get_rect().origin.x + foundation_bounders[i]->get_rect().size.x / 2.f;
-            float target_y =
-                foundation_bounders[i]->get_rect().origin.y + foundation_bounders[i]->get_rect().size.y / 2.f;
-            is_animating = true;
-            TweenManager::get().create_tween(&animated_card.y, target_y, 0.5f, Easing::EaseInOutQuad);
-            TweenManager::get()
-                .create_tween(&animated_card.x, target_x, 0.5f, Easing::EaseInOutQuad)
-                ->on_complete([&game, i, card, &animated_card]() {
-                    is_animating = false;
-                    animated_card.active = false;
-                    game.foundation[i].push_back(card);
-                });
-            return true;
-        }
-        return false;
-    }();
-
-    bool tabs = [&]() {
-        for (int i = 0; i < (int)game.tableau.size(); ++i) {
-            if (game.tableau[i].empty()) {
-                continue;
-            }
-            Card top_tableau_card = game.tableau[i].back();
-            if (top_tableau_card.rank != highest_rank + 1) {
-                continue;
-            }
-            for (int j = 0; j < 4; ++j) {
-                if (game.can_drop_into_foundation(top_tableau_card, j)) {
-                    auto card = game.tableau[i].back();
-                    game.tableau[i].pop_back();
-                    auto &animated_card = animated_cards[top_tableau_card.suit * 13 + (top_tableau_card.rank - 1)];
-                    animated_card.active = true;
-                    animated_card.face_up = true;
-                    animated_card.x = layout_context.tableau_bounders[i]->get_rect().origin.x +
-                                      layout_context.tableau_bounders[i]->get_rect().size.x / 2.f;
-                    animated_card.y = layout_context.tableau_bounders[i]->get_rect().origin.y +
-                                      layout_context.tableau_bounders[i]->get_rect().size.y / 2.f +
-                                      card_tableau_offset * (game.tableau[i].size());
-                    float target_x =
-                        foundation_bounders[j]->get_rect().origin.x + foundation_bounders[j]->get_rect().size.x / 2.f;
-                    float target_y =
-                        foundation_bounders[j]->get_rect().origin.y + foundation_bounders[j]->get_rect().size.y / 2.f;
-                    is_animating = true;
-                    TweenManager::get().create_tween(&animated_card.y, target_y, 0.5f, Easing::EaseInOutQuad);
-                    TweenManager::get()
-                        .create_tween(&animated_card.x, target_x, 0.5f, Easing::EaseInOutQuad)
-                        ->on_complete([&game, j, card, &animated_card]() {
-                            is_animating = false;
-                            animated_card.active = false;
-                            game.foundation[j].push_back(card);
-                        });
-                    return true;
-                }
-            }
-        }
-        return false;
-    }();
-
-    return waste || tabs;
 }
 
 void ruleset_editor(GameRuleset &ruleset, bool readonly) {
@@ -442,7 +142,10 @@ void ruleset_editor(GameRuleset &ruleset, bool readonly) {
     if (readonly) {
         ImGui::BeginDisabled();
     }
-    ImGui::InputInt("Number of tableau piles", &ruleset.num_tableau_piles);
+    ImGui::BeginDisabled();
+    static int disabled_default_value_tableau = 7;
+    ImGui::InputInt("Number of tableau piles", &disabled_default_value_tableau);
+    ImGui::EndDisabled();
     ImGui::InputInt("Stock to waste offset", &ruleset.stock_to_waste_offset);
     ImGui::Checkbox("Allow waste to recycle", &ruleset.allow_waste_to_recycle);
     ImGui::Checkbox("Allow any card to empty tableau", &ruleset.allow_any_card_to_empty_tableau);
@@ -513,12 +216,7 @@ void render_main_menu(bool *show_menu, bool *want_quit, PersistentContext &ctx) 
         if (ImGui::BeginPopupModal("Settings###SettingsModal", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
 
             if (ctx.game) {
-                auto &game = *ctx.game;
                 ruleset_editor(ctx.ruleset, false);
-                ImGui::SeparatorText("Debug");
-                ImGui::Text("Stock : %zu", game.stock.size());
-                ImGui::Text("Waste : %zu", game.waste.size());
-                ImGui::Text("Lifted cards : %zu", game.lifted_cards.cards.size());
             }
             if (ImGui::Button("Close"))
                 ImGui::CloseCurrentPopup();
@@ -536,51 +234,203 @@ void render_main_menu(bool *show_menu, bool *want_quit, PersistentContext &ctx) 
     ImGui::PopStyleVar(2);
 }
 
-void draw_animated_cards(const Solitaire &game) {
-    std::array<bool, 52> touched_cards = {false};
-    for (auto &card : game.stock) {
-        auto animated_card = animated_cards[card.suit * 13 + (card.rank - 1)];
-        touched_cards[card.suit * 13 + (card.rank - 1)] = true;
-        if (animated_card.active) {
-            auto params = CardDrawParams{.x = animated_card.x,
-                                         .y = animated_card.y,
-                                         .width = CARD_WIDTH * CARD_SCALE,
-                                         .height = CARD_HEIGHT * CARD_SCALE,
-                                         .rotation = 0.f,
-                                         .face_up = animated_card.face_up};
-            draw_card_to_screen(animated_card.card, params);
-        }
+Generic *init_canvas_layer(CanvasLayer *canvas_layer) {
+    auto *root_node = new Generic();
+    canvas_layer->add_root_node(root_node);
+    root_node->bounds(0.f, 0.f, (float)GetScreenWidth(), (float)GetScreenHeight());
+
+    auto *hbox = new HBox();
+    root_node->add_child(hbox);
+    hbox->anchors_fill()->expand(1.f, 1.f);
+
+    auto *left_vbox = new VBox();
+    hbox->add_child(left_vbox);
+    left_vbox->anchors_fill()->minimum_size(256.f, 0.f)->expand(0.f, 1.f);
+
+    auto *right_vbox = new VBox();
+    hbox->add_child(right_vbox);
+    right_vbox->anchors_fill()->expand(1.f, 1.f);
+
+    auto *stock_deck_node = new Center();
+    left_vbox->add_child(stock_deck_node);
+    stock_deck_node->anchors_fill()->minimum_size(200.f, CARD_HEIGHT * get_card_scale() + 50);
+
+    auto *stock_stack_node = new Center();
+    left_vbox->add_child(stock_stack_node);
+    stock_stack_node->anchors_fill()->minimum_size(200.f, CARD_HEIGHT * get_card_scale() + 50);
+
+    auto *stock_bounder_node = new Generic();
+    stock_deck_node->add_child(stock_bounder_node);
+    stock_bounder_node->anchors_fill()->minimum_size(CARD_WIDTH * get_card_scale(), CARD_HEIGHT * get_card_scale());
+
+    auto *waste_bounder_node = new Generic();
+    stock_stack_node->add_child(waste_bounder_node);
+    waste_bounder_node->anchors_fill()->minimum_size(CARD_WIDTH * get_card_scale(), CARD_HEIGHT * get_card_scale());
+
+    auto foundation_hflow = new HFlow();
+    right_vbox->add_child(foundation_hflow);
+    foundation_hflow->anchors_fill()->expand(1.f, 0.f)->minimum_size(0.f, CARD_HEIGHT * get_card_scale() + 50);
+
+    std::vector<LayoutNode *> foundation_bounders;
+    for (int i = 0; i < 4; ++i) {
+        auto *foundation_node = new Center();
+        foundation_hflow->add_child(foundation_node);
+        foundation_node->anchors_fill()->minimum_size(CARD_WIDTH * get_card_scale() + 50,
+                                                      CARD_HEIGHT * get_card_scale() + 50);
+
+        auto *foundation_bounder_node = new Generic();
+        foundation_node->add_child(foundation_bounder_node);
+        foundation_bounder_node->anchors_fill()->minimum_size(CARD_WIDTH * get_card_scale(),
+                                                              CARD_HEIGHT * get_card_scale());
+        foundation_bounders.push_back(foundation_bounder_node);
     }
-    for (auto &card : game.waste) {
-        auto animated_card = animated_cards[card.suit * 13 + (card.rank - 1)];
-        touched_cards[card.suit * 13 + (card.rank - 1)] = true;
-        if (animated_card.active) {
-            auto params = CardDrawParams{.x = animated_card.x,
-                                         .y = animated_card.y,
-                                         .width = CARD_WIDTH * CARD_SCALE,
-                                         .height = CARD_HEIGHT * CARD_SCALE,
-                                         .rotation = 0.f,
-                                         .face_up = animated_card.face_up};
-            draw_card_to_screen(animated_card.card, params);
+
+    auto *tableau_hflow = new HFlow();
+    right_vbox->add_child(tableau_hflow);
+    tableau_hflow->anchors_fill()->expand(1.f, 1.f)->minimum_size(0.f, 256.f);
+
+    std::vector<LayoutNode *> tableau_bounders;
+    for (int i = 0; i < 7; ++i) {
+        auto *tableau_node = new Center();
+        tableau_hflow->add_child(tableau_node);
+        tableau_node->anchors_fill()->minimum_size(CARD_WIDTH * get_card_scale() + 50,
+                                                   CARD_HEIGHT * get_card_scale() + 50);
+
+        auto *tableau_bounder_node = new Generic();
+        tableau_node->add_child(tableau_bounder_node);
+        tableau_bounder_node->anchors_fill()->minimum_size(CARD_WIDTH * get_card_scale(),
+                                                           CARD_HEIGHT * get_card_scale());
+        tableau_bounders.push_back(tableau_bounder_node);
+    }
+
+    layout_context.canvas_layer = canvas_layer;
+    layout_context.stock_bounder = stock_bounder_node;
+    layout_context.waste_bounder = waste_bounder_node;
+    layout_context.tableau_bounders = tableau_bounders;
+    layout_context.foundation_bounders = foundation_bounders;
+    return root_node;
+}
+
+void update_animated_cards() {
+    if (!current_animation && !command_queue.empty()) {
+        current_animation = command_queue.front();
+        command_queue.pop_front();
+
+        // Set target positions for the animated cards
+        for (int card_id : current_animation->cards) {
+            AnimatedCard &animated_card = animated_cards[card_id];
+            animated_card.target_position = current_animation->target_position;
         }
     }
 
-    for (int i = 0; i < 52; ++i) {
-        if (touched_cards[i]) {
-            continue;
-        }
-        auto animated_card = animated_cards[i];
-        if (animated_card.active) {
-            auto params = CardDrawParams{.x = animated_card.x,
-                                         .y = animated_card.y,
-                                         .width = CARD_WIDTH * CARD_SCALE,
-                                         .height = CARD_HEIGHT * CARD_SCALE,
-                                         .rotation = 0.f,
-                                         .face_up = animated_card.face_up};
-            draw_card_to_screen(animated_card.card, params);
+    if (!current_animation) {
+        return;
+    }
+
+    for (auto animated_card_id : current_animation->cards) {
+        AnimatedCard &animated_card = animated_cards[animated_card_id];
+        float speed = 500.0f; // pixels per second
+        Vector2 direction = {animated_card.target_position.x - animated_card.position.x,
+                             animated_card.target_position.y - animated_card.position.y};
+        float distance = std::sqrt(direction.x * direction.x + direction.y * direction.y);
+
+        if (distance < 10.0f) {
+            animated_card.position = animated_card.target_position;
+            current_animation = std::nullopt; // Animation complete
+            break;
+        } else {
+            direction.x /= distance;
+            direction.y /= distance;
+
+            float delta_time = GetFrameTime();
+            animated_card.position.x += direction.x * speed * delta_time;
+            animated_card.position.y += direction.y * speed * delta_time;
         }
     }
 }
+
+void draw_animated_cards(Solitaire &game) {
+    std::vector<Card> cards_sorted;
+    cards_sorted.reserve(52);
+
+    cards_sorted.insert(cards_sorted.end(), game.get_stock().cards.begin(), game.get_stock().cards.end());
+    cards_sorted.insert(cards_sorted.end(), game.get_waste().cards.begin(), game.get_waste().cards.end());
+    for (int i = 0; i < 4; ++i){
+        const auto &foundation = game.get_foundation(i);
+        cards_sorted.insert(cards_sorted.end(), foundation.cards.begin(), foundation.cards.end());
+    }
+    for (int i = 0; i < 7; ++i){
+        const auto &tableau = game.get_tableau(i);
+        cards_sorted.insert(cards_sorted.end(), tableau.cards.begin(), tableau.cards.end());
+    }
+
+    for (const auto &card : cards_sorted) {
+        auto animated_card = animated_cards[card.id()];
+        auto params = CardDrawParams{.x = animated_card.position.x,
+                                     .y = animated_card.position.y,
+                                     .width = CARD_WIDTH * get_card_scale(),
+                                     .height = CARD_HEIGHT * get_card_scale(),
+                                     .rotation = 0.f,
+                                     .face_up = card.is_face_up};
+        draw_card_to_screen(card, params);
+    }
+}
+
+void handle_game_mouse_input(PersistentContext &ctx) {
+    if (current_animation) {
+        return; // Ignore mouse input during animations
+    }
+
+    auto &game = *ctx.game;
+    const Vector2 mouse_pos = GetMousePosition();
+    if (point_inside_rect(mouse_pos.x, mouse_pos.y, layout_context.stock_bounder->get_rect())) {
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            auto cards = game.flip_stock_to_waste(ctx.ruleset);
+            for (const auto &card_id : cards) {
+                auto target = get_target_position(layout_context.waste_bounder);
+                command_queue.push_back(Animation{.cards = {card_id}, .target_position = target});
+            }
+        }
+    }
+}
+
+void handle_game_keyboard_input(PersistentContext &ctx, bool &want_quit) {
+    if (IsKeyPressed(KEY_SPACE)) {
+    }
+
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        ctx.show_main_menu = !ctx.show_main_menu;
+    }
+    // TODO: delete this in prod
+    if (IsKeyPressed(KEY_Q)) {
+        want_quit = true;
+    }
+
+    // Ctrl-N for new game
+    if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_N)) {
+        new_game(ctx);
+    }
+
+    if (!ctx.game)
+        return;
+
+    // handle game-specific keyboard input
+
+    // Ctrl-Z for undo
+    bool control_down = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+    if (control_down && IsKeyPressed(KEY_Z)) {
+    }
+}
+
+void handle_game_input(PersistentContext &ctx, bool &want_quit) {
+    if (!ImGui::GetIO().WantCaptureMouse && ctx.game) {
+        handle_game_mouse_input(ctx);
+    }
+    if (!ImGui::GetIO().WantCaptureKeyboard) {
+        handle_game_keyboard_input(ctx, want_quit);
+    }
+}
+
 } // namespace
 
 int main(int argc, char *argv[]) {
@@ -614,13 +464,7 @@ int main(int argc, char *argv[]) {
 
     for (int i = 0; i < 4; ++i) {
         for (int j = 1; j <= 13; ++j) {
-            animated_cards[i * 13 + (j - 1)] = AnimatedCard{.card = Card{j, i},
-                                                            .active = false,
-                                                            .x = 0.f,
-                                                            .y = 0.f,
-                                                            // .target_x = 0.f,
-                                                            // .target_y = 0.f,
-                                                            .face_up = true};
+            animated_cards[i * 13 + (j - 1)] = AnimatedCard{.card = Card{j, i}};
         }
     }
 
@@ -628,94 +472,28 @@ int main(int argc, char *argv[]) {
     std::atomic<int> loading_progress = 0;
     init_card_images_v1(is_loading_images, loading_progress);
 
+    auto *canvas_layer = new CanvasLayer();
+    auto *root_node = init_canvas_layer(canvas_layer);
+    canvas_layer->compute_layout();
+
     PersistentContext ctx;
-    bool load_result = load_game(ctx);
+    bool load_result = load_context(ctx);
     if (load_result) {
-        SetWindowSize(ctx.window_width, ctx.window_height);
-        if (ctx.is_window_maximized) {
+        SetWindowSize(ctx.window.width, ctx.window.height);
+        if (ctx.window.is_maximized) {
             MaximizeWindow();
         }
+        canvas_layer->compute_layout();
+        init_game_card_positions(*ctx.game);
     } else {
         new_game(ctx);
     }
-
-    auto *canvas_layer = new CanvasLayer();
-    auto *root_node = new Generic();
-    canvas_layer->add_root_node(root_node);
-    root_node->bounds(0.f, 0.f, (float)GetScreenWidth(), (float)GetScreenHeight());
-
-    auto *hbox = new HBox();
-    root_node->add_child(hbox);
-    hbox->anchors_fill()->expand(1.f, 1.f);
-
-    auto *left_vbox = new VBox();
-    hbox->add_child(left_vbox);
-    left_vbox->anchors_fill()->minimum_size(256.f, 0.f)->expand(0.f, 1.f);
-
-    auto *right_vbox = new VBox();
-    hbox->add_child(right_vbox);
-    right_vbox->anchors_fill()->expand(1.f, 1.f);
-
-    auto *stock_deck_node = new Center();
-    left_vbox->add_child(stock_deck_node);
-    stock_deck_node->anchors_fill()->minimum_size(200.f, CARD_HEIGHT * CARD_SCALE + 50);
-
-    auto *stock_stack_node = new Center();
-    left_vbox->add_child(stock_stack_node);
-    stock_stack_node->anchors_fill()->minimum_size(200.f, CARD_HEIGHT * CARD_SCALE + 50);
-
-    auto *stock_bounder_node = new Generic();
-    stock_deck_node->add_child(stock_bounder_node);
-    stock_bounder_node->anchors_fill()->minimum_size(CARD_WIDTH * CARD_SCALE, CARD_HEIGHT * CARD_SCALE);
-
-    auto *waste_bounder_node = new Generic();
-    stock_stack_node->add_child(waste_bounder_node);
-    waste_bounder_node->anchors_fill()->minimum_size(CARD_WIDTH * CARD_SCALE, CARD_HEIGHT * CARD_SCALE);
-
-    auto foundation_hflow = new HFlow();
-    right_vbox->add_child(foundation_hflow);
-    foundation_hflow->anchors_fill()->expand(1.f, 0.f)->minimum_size(0.f, CARD_HEIGHT * CARD_SCALE + 50);
-
-    std::vector<LayoutNode *> foundation_bounders;
-    for (int i = 0; i < (int)ctx.game->foundation.size(); ++i) {
-        auto *foundation_node = new Center();
-        foundation_hflow->add_child(foundation_node);
-        foundation_node->anchors_fill()->minimum_size(CARD_WIDTH * CARD_SCALE + 50, CARD_HEIGHT * CARD_SCALE + 50);
-
-        auto *foundation_bounder_node = new Generic();
-        foundation_node->add_child(foundation_bounder_node);
-        foundation_bounder_node->anchors_fill()->minimum_size(CARD_WIDTH * CARD_SCALE, CARD_HEIGHT * CARD_SCALE);
-        foundation_bounders.push_back(foundation_bounder_node);
-    }
-
-    auto *tableau_hflow = new HFlow();
-    right_vbox->add_child(tableau_hflow);
-    tableau_hflow->anchors_fill()->expand(1.f, 1.f)->minimum_size(0.f, 256.f);
-
-    std::vector<LayoutNode *> tableau_bounders;
-    for (int i = 0; i < (int)ctx.game->tableau.size(); ++i) {
-        auto *tableau_node = new Center();
-        tableau_hflow->add_child(tableau_node);
-        tableau_node->anchors_fill()->minimum_size(CARD_WIDTH * CARD_SCALE + 50, CARD_HEIGHT * CARD_SCALE + 50);
-
-        auto *tableau_bounder_node = new Generic();
-        tableau_node->add_child(tableau_bounder_node);
-        tableau_bounder_node->anchors_fill()->minimum_size(CARD_WIDTH * CARD_SCALE, CARD_HEIGHT * CARD_SCALE);
-        tableau_bounders.push_back(tableau_bounder_node);
-    }
-
-    layout_context.canvas_layer = canvas_layer;
-    layout_context.stock_bounder = stock_bounder_node;
-    layout_context.waste_bounder = waste_bounder_node;
-    layout_context.tableau_bounders = tableau_bounders;
-    layout_context.foundation_bounders = foundation_bounders;
-
-    canvas_layer->compute_layout();
 
     const Color bg_color = {0x1F, 0x3F, 0x5F, 0xFF};
 
     bool want_quit = false;
     bool is_loading = true;
+    bool is_first_frame = true;
 
     while (!WindowShouldClose() && !want_quit) {
         // show loading screen
@@ -746,13 +524,14 @@ int main(int argc, char *argv[]) {
         BeginDrawing();
         ClearBackground(bg_color);
 
-        bool recompute_layout = true;
+        bool recompute_layout = IsWindowResized() || is_first_frame;
+        is_first_frame = false;
         if (recompute_layout) {
             root_node->bounds(0.f, 0.f, (float)GetScreenWidth(), (float)GetScreenHeight());
             canvas_layer->compute_layout();
-            ctx.window_width = GetScreenWidth() * GetWindowScaleDPI().x;
-            ctx.window_height = GetScreenHeight() * GetWindowScaleDPI().y;
-            ctx.is_window_maximized = IsWindowMaximized();
+            ctx.window.width = GetScreenWidth() * GetWindowScaleDPI().x;
+            ctx.window.height = GetScreenHeight() * GetWindowScaleDPI().y;
+            ctx.window.is_maximized = IsWindowMaximized();
         }
 
         auto debug_draw_node = [&](LayoutNode *node, Color color) {
@@ -764,149 +543,78 @@ int main(int argc, char *argv[]) {
             DrawRectangleLinesEx({x, y, w, h}, 2.0f, color);
         };
 
-        auto debug_draw_node_recursive = [&](LayoutNode *node, Color color, auto &self) -> void {
+        auto debug_draw_node_recursive = [&](LayoutNode *node, int depth, auto &self) -> void {
+            // set color based on depth
+            Color color;
+            switch (depth % 6) {
+            case 0:
+                color = RED;
+                break;
+            case 1:
+                color = GREEN;
+                break;
+            case 2:
+                color = BLUE;
+                break;
+            case 3:
+                color = YELLOW;
+                break;
+            case 4:
+                color = MAGENTA;
+                break;
+            case 5:
+                color = PINK;
+                break;
+            }
+
             debug_draw_node(node, color);
             for (auto *child : node->children) {
-                self(child, color, self);
+                self(child, depth + 1, self);
             }
         };
-        (void)debug_draw_node_recursive;
 
-        // debug_draw_node_recursive(root_node, PURPLE, debug_draw_node_recursive);
+        debug_draw_node_recursive(root_node, 0, debug_draw_node_recursive);
+
+        update_animated_cards();
+
+        handle_game_input(ctx, want_quit);
+        render_main_menu(&ctx.show_main_menu, &want_quit, ctx);
 
         if (ctx.game) {
             auto &game = *ctx.game;
             if (game.is_winning()) {
                 ctx.wins++;
                 // Probably spend some time animating the win, then start a new game
-                new_game(ctx);
+                // new_game(ctx);
             }
+            draw_animated_cards(game);
         }
 
         {
+            ImGui::Begin("Game State Debug Info", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+            ImGui::Text("FPS: %.1f", (float)GetFPS());
+            if (ctx.game) {
+                ImGui::Text("Current animation: %s", current_animation ? "Yes" : "No");
+                ImGui::Text("Game state:");
+                ImGui::Text("Stock: %d cards", (int)ctx.game->get_stock().cards.size());
+                ImGui::Text("Waste: %d cards", (int)ctx.game->get_waste().cards.size());
+                for (int i = 0; i < 7; ++i) {
+                    ImGui::Text("Tableau %d: %d cards", i + 1, (int)ctx.game->get_tableau(i).cards.size());
+                }
+            } else {
+                ImGui::Text("No game in progress");
+            }
+            ImGui::End();
+        }
+
+        [&]() {
             std::string wins_text = fmt::format("Wins: {}", ctx.wins);
             auto text_size = MeasureTextEx(hud_font, wins_text.c_str(), (float)hud_logical_font_size, 0.0f);
             Vector2 pos = {floorf(GetScreenWidth() - text_size.x - 24.0f), floorf(24.0f)};
             DrawTextEx(hud_font, wins_text.c_str(), {pos.x + 1.0f, pos.y + 1.0f}, (float)hud_logical_font_size, 0.0f,
                        Fade(BLACK, 0.7f));
             DrawTextEx(hud_font, wins_text.c_str(), pos, (float)hud_logical_font_size, 0.0f, WHITE);
-        }
-
-        auto &game = *ctx.game;
-
-        if (game.stock.empty() && game.ruleset.allow_waste_to_recycle) {
-            debug_draw_node(stock_bounder_node, GREEN);
-        }
-
-        // debug_draw_node(foundation_hflow, PURPLE);
-        for (int i = 0; i < (int)game.foundation.size(); ++i) {
-            if (game.foundation[i].empty()) {
-                debug_draw_node(foundation_bounders[i], ORANGE);
-            }
-        }
-
-        // draw empty tableau bounders
-        for (int i = 0; i < (int)game.tableau.size(); ++i) {
-            if (game.tableau[i].empty()) {
-                debug_draw_node(tableau_bounders[i], ORANGE);
-            }
-        }
-
-        if (!ImGui::GetIO().WantCaptureMouse && !ImGui::GetIO().WantCaptureKeyboard) {
-            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !game.is_lifting()) {
-                handle_press(game);
-            } else if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT) && game.is_lifting()) {
-                handle_drop(game);
-                reveal_tableau_cards_if_needed(game);
-            }
-        }
-        if (IsKeyPressed(KEY_SPACE)) {
-            animate_flip_stock_to_waste(game);
-        }
-        if (play_cards_to_foundation_if_needed(game)) {
-            reveal_tableau_cards_if_needed(game);
-        }
-
-        [&game]() {
-            auto stock_bounder_node = layout_context.stock_bounder;
-            auto waste_bounder_node = layout_context.waste_bounder;
-            auto foundation_bounders = layout_context.foundation_bounders;
-            auto tableau_bounders = layout_context.tableau_bounders;
-            if (!game.stock.empty()) {
-                auto params = params_from_bounder(stock_bounder_node->get_rect(), false);
-                for (int i = 0; i < (int)game.stock.size(); ++i) {
-                    params.y += card_stacking_offset;
-                    params.x += card_stacking_offset;
-                    draw_card_to_screen(game.stock[i], params);
-                }
-            }
-            if (!game.waste.empty()) {
-                auto params = params_from_bounder(waste_bounder_node->get_rect(), true);
-                for (int i = 0; i < (int)game.waste.size() - 1; ++i) {
-                    params.y += card_stacking_offset;
-                    params.x += card_stacking_offset;
-                    draw_card_to_screen(game.waste[i], params);
-                }
-                draw_card_to_screen(game.waste.back(), params);
-            }
-            for (int i = 0; i < (int)game.foundation.size(); ++i) {
-                if (!game.foundation[i].empty()) {
-                    auto params = params_from_bounder(foundation_bounders[i]->get_rect(), true);
-                    draw_card_to_screen(game.foundation[i].back(), params);
-                }
-            }
-            for (int i = 0; i < (int)game.tableau.size(); ++i) {
-                auto params = params_from_bounder(tableau_bounders[i]->get_rect(), true);
-                for (int j = 0; j < (int)game.tableau[i].size(); ++j) {
-                    if (j < game.tableau_face_down[i]) {
-                        params.face_up = false;
-                    } else {
-                        params.face_up = true;
-                    }
-                    draw_card_to_screen(game.tableau[i][j], params);
-                    params.y += card_tableau_offset;
-                }
-            }
-            if (game.is_lifting()) {
-                auto params = CardDrawParams{.x = GetMousePosition().x - game.lifted_cards.x_offset,
-                                             .y = GetMousePosition().y - game.lifted_cards.y_offset,
-                                             .width = CARD_WIDTH * CARD_SCALE,
-                                             .height = CARD_HEIGHT * CARD_SCALE,
-                                             .rotation = 0.f,
-                                             .face_up = true};
-                for (int i = 0; i < (int)game.lifted_cards.cards.size(); ++i) {
-                    draw_card_to_screen(game.lifted_cards.cards[i], params);
-                    params.y += card_tableau_offset;
-                }
-            }
         }();
-
-        draw_animated_cards(game);
-
-        render_main_menu(&ctx.show_main_menu, &want_quit, ctx);
-        if (!ImGui::GetIO().WantCaptureKeyboard && IsKeyPressed(KEY_ESCAPE)) {
-            ctx.show_main_menu = !ctx.show_main_menu;
-        }
-        // TODO: delete this in prod
-        if (IsKeyPressed(KEY_Q)) {
-            want_quit = true;
-        }
-
-        // Ctrl-N for new game
-        if (!ImGui::GetIO().WantCaptureKeyboard && IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_N)) {
-            new_game(ctx);
-        }
-
-        // Ctrl-Z for undo
-        if (!ImGui::GetIO().WantCaptureKeyboard && IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_Z)) {
-            if (game.ruleset.allow_undo) {
-                if (game.undo_last_action()) {
-                    spdlog::info("Undo successful");
-                } else {
-                    spdlog::info("Undo failed");
-                }
-            }
-        }
 
         rlImGuiEnd();
         EndDrawing();
@@ -917,7 +625,7 @@ int main(int argc, char *argv[]) {
     rlImGuiShutdown();
     CloseWindow();
 
-    save_game(ctx);
+    save_context(ctx);
 
     delete canvas_layer;
     spdlog::info("Exiting Solitaire House Rules");
