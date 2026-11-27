@@ -24,15 +24,16 @@ float get_card_scale() { return 8.0f; }
 struct AnimatedCard {
     Card card;
     Vector2 position{0.f, 0.f};
-    Vector2 target_position{0.f, 0.f};
     bool face_up{false};
 };
 
 struct Animation {
-    std::vector<int> cards;
+    int card;
+    bool is_face_up{false};
     Vector2 target_position;
 };
 
+// should just be the raw action object itself
 std::deque<Animation> command_queue;
 std::optional<Animation> current_animation;
 
@@ -62,37 +63,27 @@ Vector2 get_target_position(LayoutNode *node) {
 void init_game_card_positions(Solitaire &game) {
     // Initialize animated cards with their initial positions and face-up states
     for (const auto &card : game.get_stock().cards) {
-        animated_cards[card.id()] = AnimatedCard{.card = card,
-                                                 .position = get_target_position(layout_context.stock_bounder),
-                                                 .target_position = get_target_position(layout_context.stock_bounder),
-                                                 .face_up = false};
+        animated_cards[card.id()] =
+            AnimatedCard{.card = card, .position = get_target_position(layout_context.stock_bounder), .face_up = false};
     }
 
     for (const auto &card : game.get_waste().cards) {
-        animated_cards[card.id()] = AnimatedCard{.card = card,
-                                                 .position = get_target_position(layout_context.waste_bounder),
-                                                 .target_position = get_target_position(layout_context.waste_bounder),
-                                                 .face_up = true};
+        animated_cards[card.id()] =
+            AnimatedCard{.card = card, .position = get_target_position(layout_context.waste_bounder), .face_up = true};
     }
     for (int i = 0; i < 4; ++i) {
         const auto &foundation = game.get_foundation(i);
         for (const auto &card : foundation.cards) {
-            animated_cards[card.id()] =
-                AnimatedCard{.card = card,
-                             .position = get_target_position(layout_context.foundation_bounders[i]),
-                             .target_position = get_target_position(layout_context.foundation_bounders[i]),
-                             .face_up = true};
+            animated_cards[card.id()] = AnimatedCard{
+                .card = card, .position = get_target_position(layout_context.foundation_bounders[i]), .face_up = true};
         }
     }
     for (int i = 0; i < 7; ++i) {
         const auto &tableau = game.get_tableau(i);
         int k = 0;
         for (const auto &card : tableau.cards) {
-            auto animated_card =
-                AnimatedCard{.card = card,
-                             .position = get_target_position(layout_context.tableau_bounders[i]),
-                             .target_position = get_target_position(layout_context.tableau_bounders[i]),
-                             .face_up = true};
+            auto animated_card = AnimatedCard{
+                .card = card, .position = get_target_position(layout_context.tableau_bounders[i]), .face_up = true};
             animated_card.position.y += k * card_tableau_offset;
             animated_cards[card.id()] = animated_card;
             k++;
@@ -316,36 +307,16 @@ void update_animated_cards() {
         current_animation = command_queue.front();
         command_queue.pop_front();
 
-        // Set target positions for the animated cards
-        for (int card_id : current_animation->cards) {
-            AnimatedCard &animated_card = animated_cards[card_id];
-            animated_card.target_position = current_animation->target_position;
-        }
-    }
-
-    if (!current_animation) {
-        return;
-    }
-
-    for (auto animated_card_id : current_animation->cards) {
-        AnimatedCard &animated_card = animated_cards[animated_card_id];
-        float speed = 500.0f; // pixels per second
-        Vector2 direction = {animated_card.target_position.x - animated_card.position.x,
-                             animated_card.target_position.y - animated_card.position.y};
-        float distance = std::sqrt(direction.x * direction.x + direction.y * direction.y);
-
-        if (distance < 10.0f) {
-            animated_card.position = animated_card.target_position;
-            current_animation = std::nullopt; // Animation complete
-            break;
-        } else {
-            direction.x /= distance;
-            direction.y /= distance;
-
-            float delta_time = GetFrameTime();
-            animated_card.position.x += direction.x * speed * delta_time;
-            animated_card.position.y += direction.y * speed * delta_time;
-        }
+        AnimatedCard &animated_card = animated_cards[current_animation->card];
+        animated_card.face_up = current_animation->is_face_up;
+        TweenManager::get().create_tween(&animated_card.position.y, current_animation->target_position.y, 0.2f,
+                                         Easing::EaseInOutQuad);
+        TweenManager::get()
+            .create_tween(&animated_card.position.x, current_animation->target_position.x, 0.2f, Easing::EaseInOutQuad)
+            ->on_complete([&]() {
+                animated_card.position = current_animation->target_position;
+                current_animation.reset();
+            });
     }
 }
 
@@ -355,16 +326,30 @@ void draw_animated_cards(Solitaire &game) {
 
     cards_sorted.insert(cards_sorted.end(), game.get_stock().cards.begin(), game.get_stock().cards.end());
     cards_sorted.insert(cards_sorted.end(), game.get_waste().cards.begin(), game.get_waste().cards.end());
-    for (int i = 0; i < 4; ++i){
+    for (int i = 0; i < 4; ++i) {
         const auto &foundation = game.get_foundation(i);
         cards_sorted.insert(cards_sorted.end(), foundation.cards.begin(), foundation.cards.end());
     }
-    for (int i = 0; i < 7; ++i){
+    for (int i = 0; i < 7; ++i) {
         const auto &tableau = game.get_tableau(i);
         cards_sorted.insert(cards_sorted.end(), tableau.cards.begin(), tableau.cards.end());
     }
 
     for (const auto &card : cards_sorted) {
+        if (current_animation && card.id() == current_animation->card) {
+            continue; // Skip drawing cards that are currently being animated
+        }
+        if (game.lifted_cards) {
+            bool skip = false;
+            for (const auto &lifted_card : game.lifted_cards->cards) {
+                if (card.id() == lifted_card.id()) {
+                    skip = true;
+                    break;
+                }
+            }
+            if (skip)
+                continue; // Skip drawing lifted cards
+        }
         auto animated_card = animated_cards[card.id()];
         auto params = CardDrawParams{.x = animated_card.position.x,
                                      .y = animated_card.position.y,
@@ -374,23 +359,73 @@ void draw_animated_cards(Solitaire &game) {
                                      .face_up = card.is_face_up};
         draw_card_to_screen(card, params);
     }
+
+    if (current_animation) {
+        auto card_id = current_animation->card;
+        auto card = animated_cards[card_id].card;
+        auto animated_card = animated_cards[card_id];
+        auto params = CardDrawParams{.x = animated_card.position.x,
+                                     .y = animated_card.position.y,
+                                     .width = CARD_WIDTH * get_card_scale(),
+                                     .height = CARD_HEIGHT * get_card_scale(),
+                                     .rotation = 0.f,
+                                     .face_up = current_animation->is_face_up};
+        draw_card_to_screen(card, params);
+    }
+    if (game.lifted_cards) {
+        int i = 0;
+        for (const auto &lifted_card : game.lifted_cards->cards) {
+            auto animated_card = animated_cards[lifted_card.id()];
+            auto params = CardDrawParams{.x = GetMousePosition().x - game.lifted_cards->x_offset,
+                                         .y = GetMousePosition().y - game.lifted_cards->y_offset,
+                                         .width = CARD_WIDTH * get_card_scale(),
+                                         .height = CARD_HEIGHT * get_card_scale(),
+                                         .rotation = 0.f,
+                                         .face_up = lifted_card.is_face_up};
+            params.y += i * card_tableau_offset; // Stack lifted cards with an offset
+            draw_card_to_screen(lifted_card, params);
+            i++;
+        }
+    }
 }
 
 void handle_game_mouse_input(PersistentContext &ctx) {
-    if (current_animation) {
+    if (current_animation)
         return; // Ignore mouse input during animations
-    }
 
     auto &game = *ctx.game;
     const Vector2 mouse_pos = GetMousePosition();
-    if (point_inside_rect(mouse_pos.x, mouse_pos.y, layout_context.stock_bounder->get_rect())) {
-        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+    auto check_lift_one_from_simple_pile = [&mouse_pos, &game](LayoutNode *bounder, Pile &pile) {
+        if (point_inside_rect(mouse_pos.x, mouse_pos.y, bounder->get_rect())) {
+            const auto center_x = bounder->get_rect().origin.x + bounder->get_rect().size.x / 2.f;
+            const auto center_y = bounder->get_rect().origin.y + bounder->get_rect().size.y / 2.f;
+            game.lifted_cards = LiftedCards{.cards = {pile.cards.back()},
+                                            .source_pile_index = game.waste_,
+                                            .x_offset = mouse_pos.x - center_x,
+                                            .y_offset = mouse_pos.y - center_y};
+            return;
+        }
+    };
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (point_inside_rect(mouse_pos.x, mouse_pos.y, layout_context.stock_bounder->get_rect())) {
             auto cards = game.flip_stock_to_waste(ctx.ruleset);
             for (const auto &card_id : cards) {
                 auto target = get_target_position(layout_context.waste_bounder);
-                command_queue.push_back(Animation{.cards = {card_id}, .target_position = target});
+                command_queue.push_back(Animation{.card = card_id, .is_face_up = true, .target_position = target});
             }
+            return;
         }
+        check_lift_one_from_simple_pile(layout_context.waste_bounder, game.get_waste());
+        for (int i = 0; i < 4; ++i) {
+            check_lift_one_from_simple_pile(layout_context.foundation_bounders[i], game.get_foundation(i));
+        }
+    } else if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT) && game.lifted_cards) {
+
+        if (game.lifted_cards->cards.size() == 1) {
+            // check for drop into foundation
+        }
+
+        game.lifted_cards.reset();
     }
 }
 
@@ -411,14 +446,28 @@ void handle_game_keyboard_input(PersistentContext &ctx, bool &want_quit) {
         new_game(ctx);
     }
 
-    if (!ctx.game)
+    if (!ctx.game || current_animation)
         return;
+    auto &game = *ctx.game;
 
     // handle game-specific keyboard input
 
     // Ctrl-Z for undo
     bool control_down = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
     if (control_down && IsKeyPressed(KEY_Z)) {
+        auto action_opt = game.undo_last_action();
+        if (action_opt) {
+            const auto action = *action_opt;
+            for (const auto &unit : action.units) {
+                auto target = get_target_position(layout_context.stock_bounder);
+                for (int i = 0; i < unit.card_count; ++i) {
+                    auto card_id = game.piles_[unit.source_pile_index]
+                                       .cards[game.piles_[unit.source_pile_index].cards.size() - 1 - i]
+                                       .id();
+                    command_queue.push_back(Animation{.card = card_id, .is_face_up = false, .target_position = target});
+                }
+            }
+        }
     }
 }
 

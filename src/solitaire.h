@@ -27,11 +27,15 @@ struct Card {
     template <typename T> void serialize(T &archive) { archive(rank, suit, is_face_up); }
 };
 
+enum PileKind { Stock, Waste, Tableau, Foundation };
+
 struct Pile {
-    bool is_tableau = false; // true if tableau pile, false if foundation pile
     std::vector<Card> cards;
 
-    template <typename T> void serialize(T &archive) { archive(cards); }
+    PileKind kind;
+    int index{-1};
+
+    template <typename T> void serialize(T &archive) { archive(cards, kind, index); }
 };
 
 struct LiftedCards {
@@ -41,9 +45,7 @@ struct LiftedCards {
     float x_offset = 0.f; // x offset for dragging
     float y_offset = 0.f; // y offset for dragging
 
-    template <typename T> void serialize(T &archive) {
-        archive(cards, source_pile_index, x_offset, y_offset);
-    }
+    template <typename T> void serialize(T &archive) { archive(cards, source_pile_index, x_offset, y_offset); }
 };
 
 struct GameRuleset {
@@ -81,7 +83,7 @@ struct SolitaireAction {
 };
 
 struct Solitaire {
-    LiftedCards lifted_cards;
+    std::optional<LiftedCards> lifted_cards;
 
     std::vector<SolitaireAction> action_history; // for undo functionality
 
@@ -97,7 +99,7 @@ struct Solitaire {
     std::vector<int> flip_stock_to_waste(const GameRuleset &ruleset);
 
     void do_action(const SolitaireAction &action);
-    bool undo_last_action();
+    std::optional<SolitaireAction> undo_last_action();
 
     const Pile &get_foundation(int i) const;
     const Pile &get_tableau(int i) const;
@@ -108,6 +110,12 @@ struct Solitaire {
     Pile &get_tableau(int i);
     Pile &get_stock();
     Pile &get_waste();
+
+    const Pile &get_pile(int i) const;
+    Pile &get_pile(int i);
+
+
+    // need a mapping pile id -> screen location for drawing cards and for hit detection
 
     template <typename T> void serialize(T &archive) {
         archive(lifted_cards, action_history, piles_, tableaus_, foundations_, stock_, waste_);

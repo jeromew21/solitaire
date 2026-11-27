@@ -79,12 +79,12 @@ void Solitaire::do_action(const SolitaireAction &action) {
     action_history.push_back(action);
 }
 
-bool Solitaire::undo_last_action() {
+std::optional<SolitaireAction> Solitaire::undo_last_action() {
     if (action_history.empty()) {
-        return false;
+        return std::nullopt;
     }
 
-    const auto &last_action = action_history.back();
+    const SolitaireAction last_action = action_history.back();
     for (auto it = last_action.units.rbegin(); it != last_action.units.rend(); ++it) {
         const auto &unit = *it;
         auto &source_pile = piles_[unit.source_pile_index];
@@ -104,11 +104,10 @@ bool Solitaire::undo_last_action() {
         }
     }
     action_history.pop_back();
-    return true;
+    return last_action;
 }
 
 void Solitaire::reset(const GameRuleset &ruleset, std::optional<int> seed) {
-    (void)ruleset;
     action_history.clear();
     lifted_cards = {};
     piles_.clear();
@@ -117,9 +116,13 @@ void Solitaire::reset(const GameRuleset &ruleset, std::optional<int> seed) {
 
     std::vector<Card> deck = create_shuffled_deck(seed);
 
-    // Initialize the piles based on the ruleset
+    (void)ruleset;
+
+    // Right now, always assume 7 tableau piles and 4 foundation piles, with the rest in stock and waste.
+    // The ruleset can be used to customize this in the future.
+
     for (int i = 0; i < 7; ++i) {
-        Pile tableau;
+        Pile tableau = {.kind = PileKind::Tableau, .index = i};
         for (int j = 0; j <= i; ++j) {
             tableau.cards.push_back(deck.back());
             deck.pop_back();
@@ -132,12 +135,12 @@ void Solitaire::reset(const GameRuleset &ruleset, std::optional<int> seed) {
     }
 
     for (int i = 0; i < 4; ++i) {
-        Pile foundation;
+        Pile foundation = {.kind = PileKind::Foundation, .index = i};
         piles_.push_back(foundation);
         foundations_.push_back(static_cast<int>(piles_.size()) - 1);
     }
 
-    Pile stock;
+    Pile stock = {.kind = PileKind::Stock};
     while (!deck.empty()) {
         deck.back().is_face_up = false; // All stock cards are face-down
         stock.cards.push_back(deck.back());
@@ -146,7 +149,7 @@ void Solitaire::reset(const GameRuleset &ruleset, std::optional<int> seed) {
     piles_.push_back(stock);
     stock_ = static_cast<int>(piles_.size()) - 1;
 
-    Pile waste;
+    Pile waste = {.kind = PileKind::Waste};
     piles_.push_back(waste);
     waste_ = static_cast<int>(piles_.size()) - 1;
 }
@@ -166,6 +169,9 @@ Pile &Solitaire::get_tableau(int i) { return piles_[tableaus_[i]]; }
 Pile &Solitaire::get_stock() { return piles_[stock_]; }
 
 Pile &Solitaire::get_waste() { return piles_[waste_]; }
+
+Pile &Solitaire::get_pile(int index) { return piles_[index]; }
+const Pile &Solitaire::get_pile(int index) const { return piles_[index]; }
 
 bool Solitaire::is_winning() const {
     for (int i = 0; i < 4; ++i) {
