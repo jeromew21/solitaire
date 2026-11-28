@@ -97,6 +97,8 @@ struct Solitaire {
     bool is_winning() const;
 
     std::vector<int> flip_stock_to_waste(const GameRuleset &ruleset);
+    bool drop_into_foundation(Card card, int foundation_index, int source_pile_index);
+    bool drop_into_tableau(const std::vector<Card> &cards, int tableau_index, int source_pile_index);
 
     void do_action(const SolitaireAction &action);
     std::optional<SolitaireAction> undo_last_action();
@@ -114,11 +116,9 @@ struct Solitaire {
     const Pile &get_pile(int i) const;
     Pile &get_pile(int i);
 
-
-    // need a mapping pile id -> screen location for drawing cards and for hit detection
-
     template <typename T> void serialize(T &archive) {
-        archive(lifted_cards, action_history, piles_, tableaus_, foundations_, stock_, waste_);
+        // We may serialize action history in future but for now let's not, it's too complicated
+        archive(lifted_cards, piles_, tableaus_, foundations_, stock_, waste_);
     }
 };
 

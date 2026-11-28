@@ -58,6 +58,73 @@ std::vector<int> Solitaire::flip_stock_to_waste(const GameRuleset &ruleset) {
     return flipped_card_ids;
 }
 
+bool Solitaire::drop_into_foundation(Card card, int foundation_index, int source_pile_index) {
+    if (foundation_index < 0 || foundation_index >= 4) {
+        return false;
+    }
+
+    auto &foundation = get_foundation(foundation_index);
+    if (foundation.cards.empty()) {
+        if (card.rank == 1) { // Ace
+            auto action = SolitaireAction{};
+            action.units.push_back(CardStackActionUnit{.source_pile_index = source_pile_index,
+                                                       .dest_pile_index = foundations_[foundation_index],
+                                                       .card_count = 1,
+                                                       .flips = false});
+            do_action(action);
+            return true;
+        } else {
+            return false; // Can't place non-Ace on empty foundation
+        }
+    } else {
+        const Card &top_card = foundation.cards.back();
+        if (card.suit == top_card.suit && card.rank == top_card.rank + 1) {
+            auto action = SolitaireAction{};
+            action.units.push_back(CardStackActionUnit{.source_pile_index = source_pile_index,
+                                                       .dest_pile_index = foundations_[foundation_index],
+                                                       .card_count = 1,
+                                                       .flips = false});
+            do_action(action);
+            return true;
+        } else {
+            return false; // Can't place card on foundation
+        }
+    }
+}
+
+bool Solitaire::drop_into_tableau(const std::vector<Card> &cards, int tableau_index, int source_pile_index) {
+    if (tableau_index < 0 || tableau_index >= 7) {
+        return false;
+    }
+
+    auto &tableau = get_tableau(tableau_index);
+    if (tableau.cards.empty()) {
+        if (cards.front().rank == 13) { // King
+            auto action = SolitaireAction{};
+            action.units.push_back(CardStackActionUnit{.source_pile_index = source_pile_index,
+                                                       .dest_pile_index = tableaus_[tableau_index],
+                                                       .card_count = static_cast<int>(cards.size()),
+                                                       .flips = false});
+            do_action(action);
+            return true;
+        }
+    } else {
+        if (cards.front().rank == tableau.cards.back().rank - 1 &&
+            cards.front().suit % 2 != tableau.cards.back().suit % 2) {
+            auto action = SolitaireAction{};
+            action.units.push_back(CardStackActionUnit{.source_pile_index = source_pile_index,
+                                                       .dest_pile_index = tableaus_[tableau_index],
+                                                       .card_count = static_cast<int>(cards.size()),
+                                                       .flips = false});
+            do_action(action);
+            return true;
+        } else {
+            return false; // Can't place cards on tableau
+        }
+    }
+    return false;
+}
+
 void Solitaire::do_action(const SolitaireAction &action) {
     for (const auto &unit : action.units) {
         auto &source_pile = piles_[unit.source_pile_index];
@@ -171,6 +238,7 @@ Pile &Solitaire::get_stock() { return piles_[stock_]; }
 Pile &Solitaire::get_waste() { return piles_[waste_]; }
 
 Pile &Solitaire::get_pile(int index) { return piles_[index]; }
+
 const Pile &Solitaire::get_pile(int index) const { return piles_[index]; }
 
 bool Solitaire::is_winning() const {
